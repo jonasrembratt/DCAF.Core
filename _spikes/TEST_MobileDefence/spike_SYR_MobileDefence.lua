@@ -1,0 +1,1 @@
+DCAF.MobileDefence:New("RED Mobile-1", 2)
