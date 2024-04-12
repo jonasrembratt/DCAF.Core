@@ -109,7 +109,7 @@ DCAF.TTSChannel = {
 }
 
 local function initTTSChannel(channel, callsign, frequency, modulation, coalition)
-    channel.Callsign = callsign or DCAF.TTSChannel.Callsign
+    channel.Callsign = callsign or channel.Callsign or DCAF.TTSChannel.Callsign
     channel.Frequency = frequency or DCAF.TTSChannel.Frequency
     channel.Modulation = modulation or DCAF.TTSChannel.Modulation
     local dcsCoalition = Coalition.Resolve(coalition or DCAF.TTSChannel.Coalition, true)
@@ -120,23 +120,39 @@ local function initTTSChannel(channel, callsign, frequency, modulation, coalitio
     return channel
 end
 
+local function resolveFreqAndMod(frequency, modulation)
+    local freq, mod
+    if isClass(frequency, DCAF.Frequency) then
+        freq = frequency.Freq
+        mod = frequency.Mod
+    else
+        freq = frequency
+        mod = modulation
+    end
+    return freq, mod
+end
+
 --- Creates, initializes, and returns a new #DCAF.TTSChannel
 -- @param #string callsign - (optional; default = 'TOP DOG') Specifies the channel callsign
--- @param #number frequency - (optional; default = 357.000) Specifies the frequency for the channel
+-- @param #Any frequency - (optional; default = 357.000) Specifies the frequency for the channel. Number (frequency) -or- a #DCAF.Frequency; if the latter modulation can also be passed in that object
 -- @param #number modulation - (optional; default = radio.modulation.AM) Specifies the modulation for the channel
 -- @param #number coalition - (optional; default = coalition.side.BLUE) Specifies the modulation for the channel
 function DCAF.TTSChannel:New(callsign, frequency, modulation, coalition)
+    local freq, mod = resolveFreqAndMod(frequency, modulation)
     local channel = DCAF.clone(DCAF.TTSChannel)
-    initTTSChannel(channel, callsign, frequency, modulation, coalition)
+    initTTSChannel(channel, callsign, freq, mod, coalition)
     return channel
 end
 
 --- Tunes a frequency/modulation. Current frequency can be restored with Detune()
--- @param #number frequency - (optional; default = 357.000) Specifies the frequency for the channel
+-- @param #Any frequency - (optional; default = 357.000) Specifies the frequency for the channel. Number (frequency) -or- a #DCAF.Frequency; if the latter modulation can also be passed in that object
 -- @param #number modulation - (optional; default = radio.modulation.AM) Specifies the modulation for the channel
 function DCAF.TTSChannel:Tune(frequency, modulation)
+    local freq, mod = resolveFreqAndMod(frequency, modulation)
+    if freq and not isNumber(freq) then return Error("DCAF.TTSChannel:Tune :: `frequency` must be a number, but was: " .. DumpPretty(frequency)) end
+    if modulation and modulation ~= radio.modulation.AM and modulation ~= radio.modulation.FM then Error("DCAF.TTSChannel:Tune :: `modulation` is not valid: " .. DumpPretty(modulation)) end
     self:_pushCurrentFreq()
-    initTTSChannel(self, self.Callsign, frequency, modulation)
+    initTTSChannel(self, self.Callsign, freq, mod)
     return self
 end
 
@@ -145,6 +161,7 @@ function DCAF.TTSChannel:Detune()
     if not self._freqStack or #self._freqStack  == 0 then return self end
     local freq = self._freqStack[#self._freqStack]
     self._freqStack[#self._freqStack] = nil
+    initTTSChannel(self, nil, freq.Freq, freq.Mod)
     return self
 end
 
@@ -303,36 +320,46 @@ function DCAF.TTSChannel:Message(text, callsign, isActual, dash, isReplay)
             text = ensureSSMS()
         end
         local volume = 1
-        self._nextTransmit = UTILS.SecondsOfToday() + self.Interval
-        if not isReplay then
-            self:AddToMsgLog(text, callsign, isActual, dash)
-        end
-        Debug("DCAF.TTSChannel:Message :: freq: " .. Dump(self.Frequency) .. " :: mod: " .. self.Modulation .. " :: gender: " .. Dump(gender) .. " :: culture: " .. Dump(culture) .. " :: voice: " .. Dump(voice)  .. " :: coalition: " .. Dump(self.Coalition) .. " :: isSimulatedTTS: " .. Dump(isSimulatedTTS) )
-        Debug("DCAF.TTSChannel:Message :: text: '" .. text .. "'")
-        if isSimulatedTTS then
-            local delay = 0 -- math.random(1, 4)
-            local sFrequency = string.format("%.3f", self.Frequency)
-            if self.Modulation == radio.modulation.AM then
-                sFrequency = sFrequency .. " AM"
-            else
-                sFrequency = sFrequency .. " FM"
-            end
+        local now = UTILS.SecondsOfToday()
+        local delay = 0
 
-            local duration = self.TTS_Simulated_Duration or DCAF.TTSChannel.TTS_Simulated_Duration
-            MessageTo(nil, "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| TTS [" .. sFrequency .. "] |||||||||||||||||||||||||||||||||||||||||||||||||||||||||", duration + delay)
-            local text_tts
-            local isMultiLine = self.Is_TTS_Simulated_Multi_Line or DCAF.TTSChannel.Is_TTS_Simulated_Multi_Line
-            if isMultiLine then
-                text_tts = text_processed
-            else
-                text_tts = string.sub(text_processed, 1, 90)
+        local function doSend()
+            if not isReplay then
+                self:AddToMsgLog(text, callsign, isActual, dash)
             end
-            DCAF.delay(function()
-                MessageTo(nil, text_tts, duration)
-            end, delay)
-            return
+            Debug("DCAF.TTSChannel:Message :: freq: " .. Dump(self.Frequency) .. " :: mod: " .. self.Modulation .. " :: gender: " .. Dump(gender) .. " :: culture: " .. Dump(culture) .. " :: voice: " .. Dump(voice)  .. " :: coalition: " .. Dump(self.Coalition) .. " :: isSimulatedTTS: " .. Dump(isSimulatedTTS) )
+            Debug("DCAF.TTSChannel:Message :: text: '" .. text .. "'")
+            if isSimulatedTTS then
+                local delay = 0 -- math.random(1, 4)
+                local sFrequency = string.format("%.3f", self.Frequency)
+                if self.Modulation == radio.modulation.AM then
+                    sFrequency = sFrequency .. " AM"
+                else
+                    sFrequency = sFrequency .. " FM"
+                end
+
+                local duration = self.TTS_Simulated_Duration or DCAF.TTSChannel.TTS_Simulated_Duration
+                MessageTo(nil, "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| TTS [" .. sFrequency .. "] |||||||||||||||||||||||||||||||||||||||||||||||||||||||||", duration + delay)
+                local text_tts
+                local isMultiLine = self.Is_TTS_Simulated_Multi_Line or DCAF.TTSChannel.Is_TTS_Simulated_Multi_Line
+                if isMultiLine then
+                    text_tts = text_processed
+                else
+                    text_tts = string.sub(text_processed, 1, 90)
+                end
+                DCAF.delay(function()
+                    MessageTo(nil, text_tts, duration)
+                end, delay)
+                return
+            end
+            MESSAGE:New(text):ToSRS(self.Frequency, self.Modulation, gender, culture, voice, self.Coalition, volume)
         end
-        MESSAGE:New(text):ToSRS(self.Frequency, self.Modulation, gender, culture, voice, self.Coalition, volume)
+
+        if self._nextTransmit and now < self._nextTransmit then
+            delay = self._nextTransmit - now
+        end
+        self._nextTransmit = now + self.Interval + delay
+        DCAF.delay(doSend, delay)
     end
 
     send()

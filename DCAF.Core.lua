@@ -799,12 +799,13 @@ end
 -- @param #number The time (seconds) to delay the invocaton
 -- @param #any (optional) Arguments to be passed to function
 function DCAF.delay(func, delay, args)
-    if args and not isList(args) then
-        args = { args }
-    end
+    if not isFunction(func) then return Error("DCAF.delay :: `func` must be a function, but was: " .. DumpPretty(func)) end
     if not isNumber(delay) then
         return Error("DCAF.delay :: `delay` must be number, but was: " .. DumpPretty(delay)) end
 
+    if args and not isList(args) then
+        args = { args }
+    end
     if delay < 0 then
         return Error("DCAF.delay :: `delay` cannot be negative number, but was: " .. delay)
     elseif delay == 0 then
