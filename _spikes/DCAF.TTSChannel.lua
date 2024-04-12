@@ -1,5 +1,22 @@
 -- Relies on MOOSE, and Google voice synthetization https://cloud.google.com/text-to-speech/docs/voices)
 
+DCAF.Frequency = {
+    Freq = 0,
+    Mod = radio.modulation.AM
+}
+
+function DCAF.Frequency:New(freq, mod)
+    local f = DCAF.clone(DCAF.Frequency)
+    if not isNumber(freq) then return Error("DCAF.Frequency:New :: ") end
+    f.Freq = freq
+    f.Mod = mod or DCAF.Frequency.Mod
+    return f
+end
+
+Frequencies = {
+    Guard = DCAF.Frequency:New(243)
+}
+
 local TTSChannel_DEFAULTS = {
     VoiceNormal = "en-GB-Wavenet-F",
     VoiceActual = "en-GB-Wavenet-D",
@@ -114,13 +131,29 @@ function DCAF.TTSChannel:New(callsign, frequency, modulation, coalition)
     return channel
 end
 
---- Tunes a frequency/modulation
+--- Tunes a frequency/modulation. Current frequency can be restored with Detune()
 -- @param #number frequency - (optional; default = 357.000) Specifies the frequency for the channel
 -- @param #number modulation - (optional; default = radio.modulation.AM) Specifies the modulation for the channel
 function DCAF.TTSChannel:Tune(frequency, modulation)
+    self:_pushCurrentFreq()
     initTTSChannel(self, self.Callsign, frequency, modulation)
+    return self
 end
 
+--- De-tunes current frequency, and re-tunes the previous one. This only makes sense after having invoked Tune() at least once
+function DCAF.TTSChannel:Detune()
+    if not self._freqStack or #self._freqStack  == 0 then return self end
+    local freq = self._freqStack[#self._freqStack]
+    self._freqStack[#self._freqStack] = nil
+    return self
+end
+
+function DCAF.TTSChannel:_pushCurrentFreq()
+    self._freqStack = self._freqStack or {}
+    self._freqStack[#self._freqStack+1] = DCAF.Frequency:New(self.Frequency, self.Modulation)
+    return self
+end
+    
 --- Initializes the two voices available (normal and actual) for the channel (see https://cloud.google.com/text-to-speech/docs/voices)
 -- @param #string voice - Identifies a supported Google TTS voice
 function DCAF.TTSChannel:InitVoice(voice)

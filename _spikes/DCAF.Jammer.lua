@@ -57,7 +57,7 @@ DCAF.Jammer = {
     JammerBlindZoneAngle = DCAF_Jammer_Defaults.JammerBlindZoneAngle,
     JammerInterval = DCAF_Jammer_Defaults.JammerInterval,
     TargetTypes = nil,      -- #table of emitter model type names to target while jamming
-    _debug_log = false,       -- when set, writest log messages to dcs.log
+    _debug_log = false,       -- when set, writes log messages to dcs.log
     _debug_messages = false,  -- whet true, posts text messages to all. Can also be set to #GROUP or #DCAF.Coalition to control message scope
     _debug_visualize = false, -- when set, draws the projected jammed region
 }
@@ -127,7 +127,7 @@ function DCAF_JammedGroup.Remove(group, jammer)
     if not jg then
         return end
 
-    Debug("nisse - DCAF_JammedGroup.Remove :: group.GroupName: " .. group.GroupName)
+Debug("nisse - DCAF_JammedGroup.Remove :: group.GroupName: " .. group.GroupName)
     tableRemoveWhere(jg.Jammers, function(i) return i.Name == jammer.Name end)
     if #jg.Jammers == 0 then
         enable(jg, true, 100, true)
@@ -226,6 +226,7 @@ Debug("DCAF_JammingScheduler:Stop :: Count_JammedGroups: " .. Count_JammedGroups
     if Count_JammedGroups > 0 then return end
     DCAF.stopScheduler(self.SchedulerID)
     self.SchedulerID = nil
+    Count_JammedGroups = 0
 end
 
 
@@ -337,7 +338,7 @@ function DCAF.Jammer:Send(message)
 end
 
 function DCAF.Jammer:Debug(log, visualize, messages)
-    self._debu_log = log
+    self:DebugLog(log)
     self._debug_visualize = visualize
     if not messages then
         return self end
@@ -461,8 +462,7 @@ Debug("nisse - hasRadar :: group: " .. group.GroupName .. " :: radarUnits: " .. 
 end
 
 function DCAF.Jammer:_jam(locLobe, radius, bands)
-Debug("nisse - _jam ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
-
+    self:_messageDebug("nisse - _jam ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::")
     local coordOwn = self.Group:GetCoordinate()
     local coordLobe = locLobe:GetCoordinate()
     local now = UTILS.SecondsOfToday()
@@ -500,7 +500,7 @@ Debug("nisse - _jam ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     local function consolidate(group)
         local radarUnits = hasRadar(group)
         if not radarUnits then return end
-        local strength = self:GetJammerStrength(group:GetCoordinate(), nil --[[, nisse_debug]])
+        local strength = self:GetJammerStrength(group:GetCoordinate())
         if strength > 0 then
             suppress(group, strength)
         else
@@ -645,7 +645,7 @@ function DCAF.Jammer:IsJamming()
 end
 
 function DCAF.Jammer:StartJammer(locLobe, radius, delay, types)
-Debug("nisse - DCAF.Jammer:StartJammer...")    
+Debug("nisse - DCAF.Jammer:StartJammer...")
     if self._jammerScheduleID then
         return self end
 
@@ -699,16 +699,13 @@ function DCAF.Jammer:StopJammer(delay)
     end, delay)
 end
 
-function DCAF.Jammer:GetJammerStrength(group, locLobe, nisse_debug)
+function DCAF.Jammer:GetJammerStrength(group, locLobe)
     -- note - this is a great place to apply more realistic jammer efficiency calculations
     local coordJammer = self:GetCoordinate()
     if not coordJammer then
         return 0 end
 
     local distance = coordJammer:Get2DDistance(group:GetCoordinate())
--- if nisse_debug then
---     Debug("nisse - DCAF.Jammer:GetJammerStrength :: distance: " .. distance .. " :: JammerRangeMax: " .. self.JammerRangeMax)
--- end
     locLobe = locLobe or self._locLobe
     local coordLobe = locLobe:GetCoordinate()
     local maxRange = self._lobe:GetMaxCoverage(self, coordLobe, radius)
@@ -751,6 +748,11 @@ function DCAF.Jammer:GetJammerStrength(group, locLobe, nisse_debug)
     local normAspect = aspect - grayZoneStart
     local grayZoneFactor = normAspect / grayZone
     return grayZoneFactor * self.JammerResidualStrength
+end
+
+function DCAF.Jammer:DebugLog(value)
+    self._debug_log = value
+    return self
 end
 
 function DCAF.Jammer:_messageDebug(message)
