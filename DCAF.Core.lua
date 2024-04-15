@@ -264,6 +264,8 @@ end
 -- Unit types
 
 local DCAF_UnitTypeInfo = {
+    ClassName = "DCAF_UnitTypeInfo",
+    ----
     TypeName = nil,         -- #string (eg. "AV8BNA")
     Nicknames = nil,        -- dictionary of #string(s) (eg. "Harrier")
     Category = nil -- Unit.Category.SHIP/.GROUND_UNIT/.AIRPLANE/.HELICOPTER/.STRUCTURE
@@ -308,6 +310,7 @@ ENUMS.UnitType.F16CM = DCAF_UnitTypeInfo:New("F-16C_50", Unit.Category.AIRPLANE,
 ENUMS.UnitType.F14A135GR = DCAF_UnitTypeInfo:New("F-14A-135-GR", Unit.Category.AIRPLANE, "Tomcat")
 ENUMS.UnitType.F14B = DCAF_UnitTypeInfo:New("F-14B", Unit.Category.AIRPLANE, "Tomcat")
 ENUMS.UnitType.FA18C_hornet = DCAF_UnitTypeInfo:New("FA-18C_hornet", Unit.Category.AIRPLANE, {"Hornet", "Bug"})
+ENUMS.UnitType.C_130 = DCAF_UnitTypeInfo:New("C-130", Unit.Category.AIRPLANE, {"C-130", "Hercules"})
 
 function IsUnitType(source, unitType)
     if isGroup(source) then
@@ -2994,6 +2997,13 @@ function DCAF.Location:OnUnitTypesInRange(types, range, coalition, callbackFunc,
     end
     if not isFunction(callbackFunc) then
         return Error("DCAF.Location:ScanTypesInRange :: `callbackFunc` must be #function, but was: " .. DumpPretty(callbackFunc))
+    end
+    if isListOfClass(types, DCAF_UnitTypeInfo) then
+        local typeNames = {}
+        for i, info in ipairs(types) do
+            typeNames[i] = info.TypeName
+        end
+        types = typeNames
     end
     if isAssignedString(types) then
         types = {types}

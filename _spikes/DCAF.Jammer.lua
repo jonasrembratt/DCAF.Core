@@ -32,10 +32,12 @@
 ]]
 
 local DCAF_Jammer_Defaults = {
-    JammerRangeMax = NauticalMiles(80),
+    JammerRangeMax = NauticalMiles(300),
     JammerRangeMin = 0,
-    JammerGrayZoneAngle = 40,            -- gray zone start at this (relative) aspect angle
-    JammerBlindZoneAngle = 20,           -- blind zone start at this (relative) aspect angle
+    JammerGrayZoneAngle = 70,            -- gray zone start at this (relative) aspect angle
+    JammerBlindZoneAngle = 60,           -- blind zone start at this (relative) aspect angle
+    -- JammerGrayZoneAngle = 40,            -- gray zone start at this (relative) aspect angle
+    -- JammerBlindZoneAngle = 20,           -- blind zone start at this (relative) aspect angle
     JammerRadius = NauticalMiles(5),
     JammerResidualStrength = .2,         -- jammer's suppression strength outside lobe, but inside residual area
     JammerInterval = 10,    -- #number; this is how often the jam efficacy gets calculated 
@@ -580,6 +582,7 @@ function DCAF.Jammer:JamFromTrack(locLobe, locTrack, trackAltitude, trackLength,
         return Warning("DCAF.Jammer:JamFromTrack :: the distance between pattern location and ECM location (" .. UTILS.MetersToNM(dtt) .. ") exceeds the jammer max range (" .. UTILS.MetersToNM(self.JammerRangeMax) .. ")") end
 
     radius = self:GetLobeRadius(radius)
+Debug("nisse - DCAF.Jammer:JamFromTrack :: locLobe: " .. Dump(locLobe.Name))
     self._locLobe = locLobe
     self._radiusECM = radius
 
@@ -645,7 +648,7 @@ function DCAF.Jammer:IsJamming()
 end
 
 function DCAF.Jammer:StartJammer(locLobe, radius, delay, types)
-Debug("nisse - DCAF.Jammer:StartJammer...")
+Debug("nisse - DCAF.Jammer:StartJammer :: locLobe: " .. DumpPretty(locLobe or self._locLobe))
     if self._jammerScheduleID then
         return self end
 
