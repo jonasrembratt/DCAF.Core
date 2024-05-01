@@ -382,6 +382,15 @@ function tableToList(table)
     return list
 end
 
+function listRandomizeOrder(list)
+    if not isList(list) then error("listRandomizeOrder :: `list` was not actually a list, but was: " .. DumpPretty(list)) end
+    for i = #list, 2, -1 do
+        local j = math.random(i)
+        list[i], list[j] = list[j], list[i]
+      end
+      return list
+end
+
 function listClone(table, deep, startIndex, endIndex)
     if not isList(table) then
         error("tableClone :: `table` must be a list") end
@@ -421,14 +430,59 @@ function stringStartsWith(s, prefix)
     if not isAssignedString(s) or not isAssignedString(prefix) then
         return end
 
-local nisse = string.find(s, prefix)
     return string.find(s, prefix) == 1
+end
+
+function stringSplit(s, sep)
+    local words = {}
+    local sepPattern = ""
+    if sep then
+        sepPattern = sep
+    else
+        sepPattern = '%s'
+    end
+    sepPattern = '[^' .. sepPattern .. ']+'
+    for word in s:gmatch(sepPattern) do
+        words[#words+1] = word
+    end
+    return words
+end
+
+function stringTrim(s)
+    local function countWhitespace(inc)
+        local count = 0
+        local start, last
+        if inc == 1 then
+            start = 1
+            last = #s
+        else
+            start = string.len(s)
+            last = 1
+        end
+        for i = start, last, inc do
+            local c = s:sub(i,i)
+            if c == ' ' or c == '\t' or c == '\n' then
+                count = count + 1
+            else
+                return count
+            end
+        end
+    end
+    local count = countWhitespace(1)
+    if count > 0 then
+        s = s:sub(count+1, #s)
+    end
+    count = countWhitespace(-1)
+    if count > 0 then
+        s = s:sub(1, #s - count)
+    end
+    return s
 end
 
 function fileExists(name)
     if not isAssignedString(name) then
-        return fals end
-        
+        return false end
+
     local f=io.open(name,"r")
     if f~=nil then
         io.close(f)
@@ -684,19 +738,17 @@ function PhoneticAlphabet:Convert(text, slow)
     local out = ""
     if not isBoolean(slow) then slow = false end
     for c in string.gmatch(text, '.') do
---print(c)
         local p = self.Upper[c] or self.Lower[c] or self.Digit[c]
         if p then
             if slow then
-                p = p .. ". "
+                p = p .. '. '
             else
-                p = p .. " "
+                p = p .. ' '
             end
         end
         out = out .. (p or c)
---print(out)
     end
-    return out
+    return stringTrim(out)
 end
 
 function DCAF.trimInstanceFromName( name, qualifierAt )
@@ -818,6 +870,7 @@ function DCAF.delay(func, delay, args)
 
     local id = DCAF.Scheduler:Schedule(nil, func, args, delay, nil, nil, delay)
     DCAF.Scheduler:Start(id)
+    return id
 end
 
 function DCAF.stopScheduler(id, bRemove)
@@ -903,10 +956,17 @@ function isGroupInstanceOf( group, groupTemplate )
     return isGroupNameInstanceOf( group.GroupName, groupTemplate.GroupName )
 end
 
-function swap(a, b)
-    local _ = a
-    a = b
-    b = _
+function swap(a, b, key)
+    if key then
+        if not isTable(a) or not isTable(b) then error("swap :: when `key` is specified both `a` and `b` must be tables") end
+        local _ = a[key]
+        a[key] = b[key]
+        b[key] = _
+    else
+        local _ = a
+        a = b
+        b = _
+    end
     return a, b
 end
 
@@ -1298,6 +1358,37 @@ end
     return item, index
 end
 
+--- Iterates items in a table while applying a time interval between each iteration
+-- @param #table table - the table to be iterated
+-- @param #funciton func - a function to be called back for each key/value pair in the table
+-- @param #number interval - The interval (seconds) between each iteration
+-- @param #number delay - (optional; default=0) Delays the first iteration
+function tableIterateDelayed(table, func, interval, delay)
+    if not isTable(table) then return Error("tableIterateDelayed :: `table` must be a table, but was: " .. DumpPretty(table)) end
+    if not isFunction(func) then return Error("tableIterateDelayed :: `func` must be a function, but was: " .. DumpPretty(func)) end
+    if not isNumber(interval) then return Error("tableIterateDelayed :: `interval` must be a number, but was: " .. DumpPretty(interval)) end
+    if not isNumber(delay) then delay = 0 end
+    local scheduleIDs = {}
+    local isCancelled = false
+
+    local function cancelIteration()
+        isCancelled = true
+        for _, scheduleID in pairs(scheduleIDs) do
+            DCAF.stopScheduler(scheduleID)
+        end
+    end
+
+    for key, value in pairs(table) do
+        scheduleIDs[key] = DCAF.delay(function() 
+            if cancelled then return end
+            local result = func(key, value)
+            if result == false then cancelIteration() end
+        end, 
+        delay)
+        delay = delay + interval
+    end
+end
+
 function dictRandomKey(table, maxIndex, ignoreFunctions)
     if not isTable(table) then
         error("dictRandomKey :: `table` is of type " .. type(table)) end
@@ -1338,6 +1429,79 @@ function dictGetKeyFor(table, criteria)
         if isFunction(criteria) and criteria(v) then
             return key end
     end
+end
+
+function COORDINATE:ToMGRS(precision)
+    local lat, lon = coord.LOtoLL( self:GetVec3() )
+    local MGRS = coord.LLtoMGRS( lat, lon )
+-- 37S DV 24 69
+    if not isNumber(precision) then precision = 5 end
+    local mgrs = UTILS.tostringMGRS( MGRS, precision )
+    if not mgrs then return end
+    return stringSplit(mgrs)
+end
+
+--- Calculates and returns coordinate's corresponding GMRS grid and keypad
+-- @returns Three values: map (eg. "36S"), grid (eg. "DV26"), and keypad [1-9]
+function COORDINATE:ToKeypad()
+    local items = self:ToMGRS(3)
+    if not items then return end
+-- Debug("nisse - COORDINATE:ToKeypad() :: items: " .. DumpPretty(items))
+    local grid = items[2] .. " " .. string.sub(items[3], 1, 1) .. string.sub(items[4], 1, 1)
+    local x = tonumber(string.sub(items[3], 2, 3))
+    local xo, yo
+    if x < 33 then xo = 1 elseif x < 66 then xo = 2 else xo = 3 end
+    local y = 100 - tonumber(string.sub(items[4], 2, 3))
+    if y < 33 then yo = 0 elseif y < 66 then yo = 3 else yo = 6 end
+-- Debug("nisse - COORDINATE:ToKeypad() :: x: " .. x .. " :: xo: " .. xo .. " y: " .. y .. " :: yo: " .. yo )
+    local keypad = xo + yo
+-- Debug("nisse - COORDINATE:ToKeypad() :: grid: " .. grid .. " :: keypad: " .. Dump(keypad) )
+    return items[1], grid, keypad
+end
+
+--- Activates groups in a staggered fashion (applying a delay between each activation)
+-- @param #table groups - a table where all values are #GROUP objects
+-- @param #number interval - (optional; default=5) An interval (seconds) between each activation
+-- @param #function onActivatedFunc - (optional) Function to be called back for each activated group. Passes the key and group as arguments
+-- @param #number delay - (optional; default=0) Delays the first activation
+-- @param #Any order - (optional) When specified, the `groups` table will be sorted on a value found in each group. Value can be `true` or a string to specify the name of the index to be used for the activation order
+function activateGroupsStaggered(groups, interval, onActivatedFunc, delay, order)
+    if not isTable(groups) then return Error("activateGroupsStaggered :: `table` must be a #table, but was: " .. DumpPretty(table)) end
+    if not isNumber(interval) then interval = 5 end
+
+    if order ~= true and not isAssignedString(order) then
+        tableIterateDelayed(groups, function(key, group)
+            if not isGroup(group) then return Error("activateGroupsStaggered :: item with key [" .. key .. "] was not a #GROUP :: IGNORES") end
+            if not group:IsActive() then 
+                group:Activate()
+                if isFunction(onActivatedFunc) then onActivatedFunc(key, group) end
+                Debug("activateGroupsStaggered :: group " .. group.GroupName .. " was activated")
+            end
+        end, interval, delay)
+        return groups
+    end
+
+    if order == true then order = DCAF.DataKey end
+    local sorted = {}
+    for k, group in pairs(groups) do
+        if not isGroup(group) then return Error("activateGroupsStaggered :: item with key [" .. key .. "] was not a #GROUP :: IGNORES") end
+        group.__key = k
+        sorted[#sorted+1] = group
+    end
+    table.sort(sorted, function(groupA, groupB)
+        local idxA = groupA[order]
+        local idxB = groupB[order]
+        if not isNumber(idxA) or not isNumber(idxB) then return true end
+        return idxA < idxB
+    end)
+    tableIterateDelayed(sorted, function(_, group)
+        if not group:IsActive() then 
+            group:Activate()
+            if isFunction(onActivatedFunc) then onActivatedFunc(group.__key, group) end
+            Debug("activateGroupsStaggered :: group " .. group.GroupName .. " was activated")
+        end
+    end, interval, delay)
+    return groups
 end
 
 function VariableValue:New(value, variance)
@@ -1381,7 +1545,7 @@ function VariableValue:NewRange(min, max, minVariance, maxVariance)
     return vv
 end
 
-function VariableValue:GetValue()
+function VariableValue:GetValue(variance)
     local function getValue(value, variance)
         if variance == nil or variance == 0 then
             return value end
@@ -1403,7 +1567,7 @@ function VariableValue:GetValue()
     if self.MinValue then
         return getBoundedValue()
     end
-    return getValue(self.Value, self.Variance)
+    return getValue(self.Value, variance or self.Variance)
 end
 
 RoundMethod = {
@@ -2517,6 +2681,7 @@ function DCAF.Location:NewNamed(name, source, throwOnFail)
         if throwOnFail then
             error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
         else
+            Warning("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
             return location
         end
     end
@@ -2797,9 +2962,10 @@ function ScanAirborneUnits(location, range, coalition, breakOnFirst, measureSlan
         Error("ScanAirborneUnits :: could not resolve valid location from: " .. DumpPretty(location))
         return closestUnits
     end
+    local location = validLocation
     if not isBoolean(ignoreOwn) then ignoreOwn = true end
 
-    local coordinate = validLocation:GetCoordinate()
+    local coordinate = location:GetCoordinate()
     local skip
     if ignoreOwn and location:IsGroup() or location:IsUnit() then
         skip = { location.Source }
@@ -4409,6 +4575,34 @@ function SetRoute( controllable, route )
     end
     group:Route( route )
     Trace("SetRoute-"..group.GroupName.." :: group route was set :: DONE")
+end
+
+function ChangeSpeed( controllable, changeMPS )
+
+Debug("ChangeSpeed :: changeMPS: " .. Dump(changeMPS))
+
+    local validUnit = getUnit()
+    if validUnit then
+        controllable = validUnit
+    else
+        local validGroup = getGroup(controllable)
+        if not validGroup then
+            return Error("ChangeSpeed-? :: `controllable` must specify a unit or group, but was: " .. DumpPretty(controllable))
+        end
+    end
+    if not isNumber(changeMPS) then
+        return Error("ChangeSpeed-? :: `changeMPS` must be number, but was: " .. DumpPretty(changeMPS))
+    end
+    local speedMPS = controllable:GetVelocityMPS()
+Debug("ChangeSpeed :: controllable: " .. controllable.UnitName .. " :: speedMPS: " .. Dump(speedMPS))
+    local speedMPS = speedMPS + changeMPS
+Debug("ChangeSpeed :: controllable: " .. controllable.UnitName .. " :: changeMPS: " .. Dump(speedMPS))
+    local controller = controllable:_GetController()
+    if controller then 
+Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
+        controller:setSpeed(speedMPS)
+    end
+    return controllable
 end
 
 local function calcGroupOffset( group1, group2 )
@@ -8613,11 +8807,12 @@ end
 --- Sends the group to land on an airbase. The function builds a route to set up the group to land on the active runway, a bit more "structured" than the default AI behavior
 -- @param #Any source - a #CONTROLLABLE or name of controllable (must be translateable to a #GROUP); the group to be sent to land
 -- @param #Any airbase - an #AIRBASE, name of airbase, or a table - { Airbase, Runway } - to specify airbase and runway
+-- @speed #boolean approach - (optional; default=true) When true the RTB will include an initial point and simple approach for active runway
+-- @speed #number speed - (optional) The approach speed (KM/Hour)
 -- @param #function onLandedFunc - (optional) A function to be called back then AI has landed
 -- @param #number altitude - (optional) An approach altitude
 -- @param #string altitudeType - (optional) The altitude type ("BARO" or "RADIO")
--- @speed #number speed - (optional) The approach speed (KM/Hour)
-function RTBNow(source, airbase, onLandedFunc, altitude, altitudeType, speed)
+function RTBNow(source, airbase, approach, speed, onLandedFunc, altitude, altitudeType)
     local group = getGroup(source)
     if not group then
         return errorOnDebug("RTBNow :: cannot resolve group from " .. DumpPretty(source)) end
@@ -8676,12 +8871,15 @@ function RTBNow(source, airbase, onLandedFunc, altitude, altitudeType, speed)
         if not isAirbase(airbase) then
             error("RTBNow-"..group.GroupName.." :: not an #AIRBASE: " .. DumpPretty(airbase)) end
 
-        local route = {}
         -- local wpArrive
         local wpInitial
         wpLanding = wpLanding or WaypointLandAt(airbase)
         if not wpLanding then
             error("RTBNow-"..group.GroupName.." :: cannot create landing waypoint for airbase: " .. DumpPretty(airbase)) end
+
+        if not approach then
+            return { wpLanding }
+        end
 
         local abCoord = airbase:GetCoordinate()
         local bearing, distance = GetBearingAndDistance(airbase, group)

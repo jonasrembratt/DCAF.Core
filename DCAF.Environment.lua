@@ -33,3 +33,5 @@ end
 if MESSAGE then
     updateMSRS()
 end
+
+Trace("\\\\\\\\\\ DCAF.Environment.lua was loaded //////////")

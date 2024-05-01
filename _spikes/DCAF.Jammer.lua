@@ -34,8 +34,8 @@
 local DCAF_Jammer_Defaults = {
     JammerRangeMax = NauticalMiles(300),
     JammerRangeMin = 0,
-    JammerGrayZoneAngle = 70,            -- gray zone start at this (relative) aspect angle
-    JammerBlindZoneAngle = 60,           -- blind zone start at this (relative) aspect angle
+    JammerGrayZoneAngle = 80,            -- gray zone start at this (relative) aspect angle
+    JammerBlindZoneAngle = 70,           -- blind zone start at this (relative) aspect angle
     -- JammerGrayZoneAngle = 40,            -- gray zone start at this (relative) aspect angle
     -- JammerBlindZoneAngle = 20,           -- blind zone start at this (relative) aspect angle
     JammerRadius = NauticalMiles(5),
@@ -52,7 +52,7 @@ DCAF.Jammer = {
     JammerRangeMax = DCAF_Jammer_Defaults.JammerRangeMax,     -- #number; effective max range of jammer (meters)
     JammerRangeMin = 0,     -- #number; effective min range of jammer (meters)
     JammerRadius = DCAF_Jammer_Defaults.JammerRadius,           -- #number; effective radius of jammer scope (meters)
-    JammerStrength = .8,    -- #number [0-1]; 0 = no jamming, 1 = full jamming strength/comnplete suppression of emittors (can be used to reflect strength of different jammer types)
+    JammerStrength = .5,    -- #number [0-1]; 0 = no jamming, 1 = full jamming strength/comnplete suppression of emittors (can be used to reflect strength of different jammer types)
     JammerResidualStrength = DCAF_Jammer_Defaults.JammerResidualStrength,
     JammerEfficacy = 0,     -- #number [0-1]; 0 = no jamming, 1 = full jamming efficacy (reflects current efficacy of jammer)
     JammerGrayZoneAngle = DCAF_Jammer_Defaults.JammerGrayZoneAngle,
@@ -88,6 +88,13 @@ local DCAF_JammedGroup = {
 local Count_JammedGroups = 0
 
 function DCAF_JammedGroup:NewOrUpdate(group, jammer, jammerStrength)
+
+-- nisse - lobe
+if group.GroupName == 'RSAM-SA6-Tabqa-3#001' then
+-- Debug("DCAF_JammedGroup:NewOrUpdate :: group: " .. group.GroupName)
+Debug("nisse - WTF?! :: 'RSAM-SA6-Tabqa-3' should not be jammed! :: " .. DCAF.StackTrace())
+end
+
     local jg = DCAF_JammedGroups[group.GroupName]
     if not jg then
         jg = DCAF.clone(DCAF_JammedGroup)
@@ -168,7 +175,7 @@ function DCAF_JammingScheduler:Start()
         local maxStrength = 0
         local debug_vizualize = false
         for _, jammer in pairs(jg.Jammers) do
-            local strength = jammer:GetJammerStrength(jg.Group:GetCoordinate())
+            local strength = jammer:GetJammerStrength(jg.Group)
             if strength > maxStrength then
                 maxStrength = strength
             end
@@ -333,6 +340,19 @@ function DCAF.Jammer:New(group, ttsChannel, strength, radius, maxRange, minRange
     return this
 end
 
+function DCAF.Jammer:InitLobe(radius, grayZoneAnge, blindZoneAngle)
+    if isNumber(radius) then
+        self.JammerRadius = radius
+    end
+    if isNumber(grayZoneAnge) then
+        self.JammerGrayZoneAngle = grayZoneAnge
+    end
+    if isNumber(blindZoneAngle) then
+        self.JammerBlindZoneAngle = blindZoneAngle
+    end
+    return self
+end
+
 function DCAF.Jammer:Send(message)
     if self.TTSChannel then
         self.TTSChannel:Send(message)
@@ -402,14 +422,14 @@ function DCAF.Jammer:_visualize(radius, coordLobe, strength)
         return end
 
     self:_visualize_remove()
-    local maxRange = self._lobe:GetMaxCoverage(self, coordLobe, radius)
-    local coordOwn = self:GetCoordinate()
-    local hdgLobe = coordOwn:HeadingTo(coordLobe)
-    local hdgBlindZoneLeft = (hdgLobe - 90 + self.JammerBlindZoneAngle) % 360
-    local hdgBlindZoneRight = (hdgLobe + 90 - self.JammerBlindZoneAngle) % 360
-Debug("nisse - DCAF.Jammer:_visualize :: hdgLobe: " .. hdgLobe .. " :: hdgBlindZoneLeft: " .. hdgBlindZoneLeft .. " :: hdgBlindZoneRight: " .. hdgBlindZoneRight)
-    local coordsArc = getArcCoordinates(coordOwn, maxRange, hdgBlindZoneLeft, hdgBlindZoneRight)
-    self._maxRangeID = coordOwn:MarkupToAllFreeForm(coordsArc, nil, {0,1,1}, 1, {0,1,1}, .15, 0)
+    -- local maxRange = self._lobe:GetMaxCoverage(self, coordLobe, radius)
+    -- local coordOwn = self:GetCoordinate()
+    -- local hdgLobe = coordOwn:HeadingTo(coordLobe)
+    -- local hdgBlindZoneLeft = (hdgLobe - 90 + self.JammerBlindZoneAngle) % 360
+    -- local hdgBlindZoneRight = (hdgLobe + 90 - self.JammerBlindZoneAngle) % 360
+-- Debug("nisse - DCAF.Jammer:_visualize :: hdgLobe: " .. hdgLobe .. " :: hdgBlindZoneLeft: " .. hdgBlindZoneLeft .. " :: hdgBlindZoneRight: " .. hdgBlindZoneRight)
+    -- local coordsArc = getArcCoordinates(coordOwn, maxRange, hdgBlindZoneLeft, hdgBlindZoneRight)
+    -- self._maxRangeID = coordOwn:MarkupToAllFreeForm(coordsArc, nil, {0,1,1}, 1, {0,1,1}, .15, 0)
     local inc = 5
 
     local coordsLobe = {}
@@ -421,7 +441,7 @@ Debug("nisse - DCAF.Jammer:_visualize :: hdgLobe: " .. hdgLobe .. " :: hdgBlindZ
         local coord = coordLobe:Translate(coverage, radial)
         coordsLobe[#coordsLobe+1] = coord
     end
-    self._lobeID = coord1:MarkupToAllFreeForm(coordsLobe, nil, {0,1,1}, strength, {0,0,0}, 0, 3)
+    self._lobeID = coord1:MarkupToAllFreeForm(coordsLobe, nil, {0,1,1}, strength, {0,1,1}, .8, 3)
 end
 
 function DCAF.Jammer:_visualize_remove()
@@ -469,7 +489,7 @@ function DCAF.Jammer:_jam(locLobe, radius, bands)
     local coordLobe = locLobe:GetCoordinate()
     local now = UTILS.SecondsOfToday()
 
-    self:_visualize(radius, coordLobe, self:GetJammerStrength(locLobe:GetCoordinate()))
+    self:_visualize(radius, coordLobe, self:GetJammerStrength(locLobe))
 
     local function suppress(group, effectiveStrength)
         DCAF_JammedGroup:NewOrUpdate(group, self, effectiveStrength)
@@ -502,7 +522,7 @@ function DCAF.Jammer:_jam(locLobe, radius, bands)
     local function consolidate(group)
         local radarUnits = hasRadar(group)
         if not radarUnits then return end
-        local strength = self:GetJammerStrength(group:GetCoordinate())
+        local strength = self:GetJammerStrength(group)
         if strength > 0 then
             suppress(group, strength)
         else
@@ -702,13 +722,18 @@ function DCAF.Jammer:StopJammer(delay)
     end, delay)
 end
 
-function DCAF.Jammer:GetJammerStrength(group, locLobe)
+function DCAF.Jammer:GetJammerStrength(target, locLobe)
     -- note - this is a great place to apply more realistic jammer efficiency calculations
     local coordJammer = self:GetCoordinate()
     if not coordJammer then
-        return 0 end
+        return 0
+    end
 
-    local distance = coordJammer:Get2DDistance(group:GetCoordinate())
+    local coordTarget = target:GetCoordinate()
+    if not coordTarget then
+        return 0
+    end
+    local distance = coordJammer:Get2DDistance(coordTarget)
     locLobe = locLobe or self._locLobe
     local coordLobe = locLobe:GetCoordinate()
     local maxRange = self._lobe:GetMaxCoverage(self, coordLobe, radius)
@@ -717,10 +742,9 @@ function DCAF.Jammer:GetJammerStrength(group, locLobe)
     end
 
     -- check whether group is inside lobe...
-    if locLobe and group then
-        local coordGroup = group:GetCoordinate()
-        local lobeCoverage = self._lobe:GetLobeCoverage(self, coordLobe, coordLobe:HeadingTo(coordGroup))
-        distance = coordLobe:Get2DDistance(coordGroup)
+    if locLobe and target then
+        local lobeCoverage = self._lobe:GetLobeCoverage(self, coordLobe, coordLobe:HeadingTo(coordTarget))
+        distance = coordLobe:Get2DDistance(coordTarget)
         if distance < lobeCoverage then
             -- group is inside lobe...
             return self.JammerStrength * self.JammerEfficacy
@@ -731,26 +755,34 @@ function DCAF.Jammer:GetJammerStrength(group, locLobe)
     local grayZoneStart = self.JammerGrayZoneAngle
     local blindZoneStart = self.JammerBlindZoneAngle
 
-    -- residual area; manage gray/blind zone...
-    if aspect < 90 then
-        if aspect < blindZoneStart then
-            return 0
-        end
-        if aspect > grayZoneStart then
-            return self.JammerStrength * self.JammerEfficacy * self.JammerResidualStrength
-        end
-    else
-        if aspect > 180-blindZoneStart then
-            return 0
-        end
-        if aspect < 180-grayZoneStart then
-            return self.JammerStrength * self.JammerEfficacy * self.JammerResidualStrength
-        end
-    end
-    local grayZone = blindZoneStart - grayZoneStart
-    local normAspect = aspect - grayZoneStart
-    local grayZoneFactor = normAspect / grayZone
-    return grayZoneFactor * self.JammerResidualStrength
+    return 0
+    -- TODO - rewrite residual calculations - they sems to include units way out of bounds
+
+-- -- nisse - lobe coverage
+-- if isTabqaSA6 then
+-- Debug("nisse - DCAF.Jammer:GetJammerStrength :: aspect: " .. aspect .. " :: blindZoneStart: " ..blindZoneStart .. " :: grayZoneStart: " .. grayZoneStart)
+-- end
+
+--     -- residual area; manage gray/blind zone...
+--     if aspect < 90 then
+--         if aspect < blindZoneStart then
+--             return 0
+--         end
+--         if aspect > grayZoneStart then
+--             return self.JammerStrength * self.JammerEfficacy * self.JammerResidualStrength
+--         end
+--     else
+--         if aspect > 180-blindZoneStart then
+--             return 0
+--         end
+--         if aspect < 180-grayZoneStart then
+--             return self.JammerStrength * self.JammerEfficacy * self.JammerResidualStrength
+--         end
+--     end
+--     local grayZone = blindZoneStart - grayZoneStart
+--     local normAspect = aspect - grayZoneStart
+--     local grayZoneFactor = normAspect / grayZone
+--     return grayZoneFactor * self.JammerResidualStrength
 end
 
 function DCAF.Jammer:DebugLog(value)
