@@ -566,17 +566,20 @@ Debug("GBAD_REGIMENT_GROUP_DB.Despawn :: scheduled for despawn: " .. info.GroupN
 end
 
 function GBAD_REGIMENT_GROUP_DB.SpawnAllInitial(regiment, onSpawnedFunc)
+Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: mode: " .. regiment.Mode)
     local regimentIndex = GBAD_REGIMENT_GROUP_DB.RegimentIndex[regiment.Name]
     if not regimentIndex then
         return Error("GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: no regiment index found for regiment '" .. regiment.Name .. "'") end
 
     local listSpawnedInfo = {}
     local interval
-    if regiment.Mode == DCAF.GBAD.RegimentMode.Static then
+    if regiment.Mode == DCAF.GBAD.RegimentMode.OFF then
+        return listSpawnedInfo
+    elseif regiment.Mode == DCAF.GBAD.RegimentMode.Static then
         interval = 0
     end
     for _, info in pairs(regimentIndex) do
-Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: info: " .. DumpPretty(info))
+-- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: info: " .. DumpPretty(info))
         if not info.IsDynamicSpawn then
             GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc, interval)
             table.insert(listSpawnedInfo, info)
@@ -1093,10 +1096,11 @@ function DCAF.GBAD.Regiment:InitCustomSNSZones(source, zones)
 end
 
 local function gbadRegiment_filterAndIndexGroups(regiment, source, setZone, isInitialSpawn, category)
-    if source == nil then
+   if source == nil then
         return end
 
     local function indexIfIsInZones(group)
+Debug("nisse - indexIfIsInZones :: group: " .. group.GroupName)
         local coord = group:GetCoordinate()
         if not coord then
             -- group was despawned by a different regiment

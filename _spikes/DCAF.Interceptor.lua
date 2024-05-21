@@ -38,7 +38,8 @@ DCAF.Interceptor = {
     RestartInterception = true,
     LandAirbase = nil,          -- #AIRBASE to be used if interceptor signals "land now" (lowering gear) :: see :InitLandAirbase()
     LandRunway = nil,           -- #string (optional) runway to be used when LandAirbase is specified :: see :InitLandAirbase()
-    LandRouting = false         -- #boolean Specifies whether to build a route for follower as it is being sent to land
+    LandRouting = false,        -- #boolean Specifies whether to build a route for follower as it is being sent to land
+    TargetUnit = nil            -- #UNIT. When set, only this unit will be considered for interception (useful in many stories)
 }
 
 local DCAF_Interceptors = {
@@ -60,7 +61,7 @@ end
 
 local function defaultInterceptorUnitCriteria(unit)
     local unitNumber = getUnitNumber(unit)
-Debug("nisse - defaultInterceptorUnitCriteria :: unitNumber: " .. Dump(unitNumber))
+-- Debug("nisse - defaultInterceptorUnitCriteria :: unitNumber: " .. Dump(unitNumber))
     return unitNumber == 1 or unitNumber == 3
 end
 
@@ -78,7 +79,7 @@ end
 function DCAF_ClientInterceptor:OnCreated(func)
     if not isFunction(func) then return Error(DCAF.Interceptor.ClassName ..  ":OnCreated :: `func` must be function, but was: " .. DumpPretty(func)) end
     self._onCreatedFunc = func
-Debug("nisse - DCAF_ClientInterceptor:OnCreated :: _onCreatedFunc: " .. Dump(self._onCreatedFunc))
+-- Debug("nisse - DCAF_ClientInterceptor:OnCreated :: _onCreatedFunc: " .. Dump(self._onCreatedFunc))
     return self
 end
 
@@ -124,6 +125,13 @@ function DCAF_ClientInterceptor:InitLandRoute(altitude, altitudeType, speed)
     return self
 end
 
+function DCAF_ClientInterceptor:InitTargetUnit(unit)
+    local validUnit = getUnit(unit)
+    if not validUnit then return Error("DCAF.Interceptor:InitTargetUnit :: `unit` must be #UNIT, or name of unit, but was: " .. DumpPretty(unit)) end
+    self._targetUnit = validUnit
+    return self
+end
+
 function DCAF_ClientInterceptor:Start(delay)
     self._startDelay = delay
     local ci = self
@@ -142,9 +150,10 @@ function DCAF_ClientInterceptor:Start(delay)
         local existing = DCAF_Interceptors[group.GroupName]
         if existing then return end
         local i = DCAF.Interceptor:New(unit, ci._coalition):InitRestartInterception(ci._restartInterception)
-Debug("nisse - creating..." .. unit.UnitName .. "  :: ci._onCreatedFunc: " .. Dump(ci._onCreatedFunc))
+-- Debug("nisse - creating..." .. unit.UnitName .. "  :: ci._onCreatedFunc: " .. Dump(ci._onCreatedFunc))
         if ci._landAirbase then i:InitLandAirbase(ci._landAirbase, ci._landRunway) end
         if ci._landRouting then i:InitLandRout(ci._landRouting.Altitude, ci._landRouting.Speed, ci._landRouting.AltitudeType) end
+        if ci._targetUnit then i:InitTargetUnit(ci._targetUnit) end
         if ci._onCreatedFunc then ci._onCreatedFunc(i) end
         -- if ci._addPlayerMenu then
         --     i:AddPlayerMenus(ci._parentMenu)
@@ -222,6 +231,14 @@ function DCAF.Interceptor:InitLandRoute(altitude, altitudeType, speed)
     return self
 end
 
+function DCAF.Interceptor:InitTargetUnit(unit)
+    local validUnit = getUnit(unit)
+    if not validUnit then return Error("DCAF.Interceptor:InitTargetUnit :: `unit` must be #UNIT, or name of unit, but was: " .. DumpPretty(unit)) end
+    self.TargetUnit = validUnit
+    return self
+
+end
+
 function DCAF.Interceptor:_cleanUp(minDistance, countTrigger)
     for unitName, info in pairs(self._units) do
         if info.Count < countTrigger then
@@ -245,15 +262,23 @@ function DCAF.Interceptor:_cleanUp(minDistance, countTrigger)
 end
 
 function DCAF.Interceptor:_stopOnDead()
-    if not self.Group:IsAlive() then
+    local function stop()
         self:RemovePlayerMenu()
         self:Stop(true)
-        return
+        return self
+    end
+
+    if not self.Group:IsAlive() then
+        return stop()
+    end
+    if self.TargetUnit and not self.TargetUnit:IsAlive() then
+        return stop()
     end
 end
 
 local function checkInInterceptArea(rp, triggerMaxDistance)
     if rp.SlantRange > triggerMaxDistance then return end
+-- MessageTo(nil, "V: " .. rp.VerticalDiff .. " :: D: " .. rp.Direction)
     return rp.SlantRange <= triggerMaxDistance
            and
            (rp.VerticalDiff >= -20 and rp.VerticalDiff < 100)
@@ -280,27 +305,43 @@ function DCAF.Interceptor:_monitorApproach() -- i == #DCAF.Interceptor
     local me = self
     self._schedulerID = DCAF.startScheduler(function()
         me:_stopOnDead()
-        local scan = ScanAirborneUnits(me.OwnLocation, TriggerMinDistance, me.FilterCoalition, false, true, nil, true)
-Debug("DCAF.Interceptor:_monitorApproach :: scan.Units: " .. DumpPrettyDeep(scan.Units, 2) )
-        if not scan:Any() then return end
+        local units
+        if me.TargetUnit then
+            -- just look for the target unit (more efficient)...
+            local coordTargetUnit = me.TargetUnit:GetCoordinate()
+            if not coordTargetUnit then return end
+            local distance = me.OwnLocation:GetCoordinate():Get2DDistance(coordTargetUnit)
+            if distance > TriggerMinDistance then return end
+            units = { self.TargetUnit }
+-- Debug("nisse - DCAF.Interceptor:_monitorApproach :: found single target: " .. me.TargetUnit.UnitName)
+        else
+            local scan = ScanAirborneUnits(me.OwnLocation, TriggerMinDistance, me.FilterCoalition, false, true, nil, true)
+            if not scan:Any() then return end
+            units = scan.Units
+-- Debug("DCAF.Interceptor:_monitorApproach :: scan.Units: " .. DumpPrettyDeep(scan.Units, 2) )
+        end
 
-        local function isEstablishing(info)
-            local unit = info.Unit
-Debug("DCAF.Interceptor:_monitorApproach_isNearbyUnit :: unit: " .. unit.UnitName .. " :: info: " .. DumpPretty(info) )
+        local function isEstablishing(unit)
+-- Debug("DCAF.Interceptor:_monitorApproach_isNearbyUnit :: unit: " .. unit.UnitName .. " :: info: " .. DumpPretty(info) )
             if not unit:IsAlive() or unit:GetGroup().GroupName == me.Group then return end -- we don't intercept members of same group
             me._units =  me._units or {}
             local monitorInfo = me._units[unit.UnitName]
             if not monitorInfo then
                 me._units[unit.UnitName] = { Unit = unit, Count = 1 }
                 return
-            end
+                end
 -- MessageTo(me.Group, "nisse - approach " .. unit.UnitName .. " = " .. monitorInfo.Count .. "...")
             monitorInfo.Count = monitorInfo.Count + 1
             return monitorInfo.Count == TriggerCount or checkInInterceptArea(GetRelativePosition(me.OwnLocation, unit), TriggerMinDistance)
         end
 
-        for _, info in ipairs(scan.Units) do
-            if isEstablishing(info) then
+        if #units > 1 then
+            table.sort(units, function(a, b)
+                return a.Distance < b.Distance
+            end)
+        end
+        for _, unit in ipairs(units) do
+            if isEstablishing(unit) then
                 me:_monitorIntercept()
                 return me:_cleanUp(TriggerMinDistance, TriggerCount)
             end
@@ -344,7 +385,7 @@ local function detectSignalLights(unit, triggerCountBlinks)
         unit._icpt_lights[animation] = currentState
     end
     if unit._icpt_lights_count_change >= triggerCountBlinks then
---MessageTo(self.Group, "LIGHT SWITCH TRIGGER")
+-- MessageTo(nil, "LIGHT SWITCH TRIGGER")
         unit._icpt_lights = nil
         unit._icpt_lights_count_change = nil
         return true
@@ -454,10 +495,14 @@ function DCAF.Interceptor:_monitorIntercept()
         for unitName, info in pairs(me._units) do
             -- interceptor is expected at a -30 --> -80 angle (left side) and fairly same level as intercepted aircraft...
             local rp = GetRelativePosition(me.OwnLocation, info.Unit)
+local nisse_wasInInterceptArea
             local inInterceptArea = checkInInterceptArea(rp, TriggerMaxDistance)
-if isSignalComplete then
-    Debug("nisse - DCAF.Interceptor:_monitorIntercept :: rp: " .. DumpPretty(rp) .. " :: isInPosition: " .. Dump(inInterceptArea))
+if not nisse_wasInInterceptArea and inInterceptArea then
+    MessageTo(nil, "IN INTERCEPT AREA")
 end
+-- if isSignalComplete then
+--     Debug("nisse - DCAF.Interceptor:_monitorIntercept :: rp: " .. DumpPretty(rp) .. " :: isInPosition: " .. Dump(inInterceptArea))
+-- end
             if isSignalComplete and inInterceptArea then
                 resetSignals(me.Unit)
                 self:_stopScheduler() 
@@ -481,7 +526,7 @@ function DCAF.Interceptor:_monitorLeading()
     local me = self
     self:_stopScheduler()
     self._schedulerID = DCAF.startScheduler(function()
-Debug("nisse - DCAF.Interceptor:_monitorLeading :: Unit:IsAlive: " .. Dump(me.Unit:IsAlive()))
+-- Debug("nisse - DCAF.Interceptor:_monitorLeading :: Unit:IsAlive: " .. Dump(me.Unit:IsAlive()))
         if not me.Unit:IsAlive() then
             me:OnLeadUnitDead()
             me:Stop(true, "Lead unit dead")
@@ -626,7 +671,7 @@ DCAF.Offset = {
     ClassName = "DCAF.Offset",
     ----
     Longitudinal = Feet(1000),    -- x
-    Elevation = Feet(60),         -- y
+    Elevation = Feet(10),         -- y
     Horizontal = Feet(1000),      -- z
 }
 
@@ -686,7 +731,14 @@ function DCAF.Interceptor:FollowMe(follower, offset)
 -- local mooseTaskFollow = self.FollowerGroup:TaskFollow(self.Unit, offset:ToVec3())
     local controller = self.FollowerGroup:_GetController()
 Debug("nisse - DCAF.Interceptor:FollowMe :: " .. self.FollowerGroup.GroupName .. " :: hasTask: " .. Dump(controller:hasTask()))
-    controller:pushTask( taskFollow )
+    if controller:hasTask() then
+        controller:popTask()
+    end
+    -- let follower slip back for a bit before it starts following...
+    ChangeSpeed(follower, Knots(-50))
+    DCAF.delay(function()
+        controller:pushTask( taskFollow )
+    end, 20)
 -- MessageTo(nil, "nisse - " .. self.FollowerGroup.GroupName .. " is FOLLOWING " .. self.Unit.UnitName)
     -- self.FollowerGroup:PushTask(taskFollow)
     -- if self._menu then
@@ -749,7 +801,7 @@ function DCAF.Interceptor:FollowerLand(airbase, runway, restart)
     airbase = airbase or self.OwnLocation:GetCoordinate():GetClosestAirbase(Airbase.Category.AIRDROME)
     local useAirbase, useRunway = self:OnFollowerLands(airbase, self.FollowerGroup)
     airbase = useAirbase or airbase
-Debug("nisse - DCAF.Interceptor:FollowerLand :: airbase: " .. airbase.AirbaseName .. " :: coalition: " .. airbase:GetCoalition() .. " :: follower coalition: " .. self.FollowerGroup:GetCoalition())
+-- Debug("nisse - DCAF.Interceptor:FollowerLand :: airbase: " .. airbase.AirbaseName .. " :: coalition: " .. airbase:GetCoalition() .. " :: follower coalition: " .. self.FollowerGroup:GetCoalition())
     -- TODO - consider delaying ensuring coalition until later. It doesn't look very good as the follower aircraft gets respawned nearby
     self.FollowerGroup = ensureCoalition(self.FollowerGroup, airbase:GetCoalition(), airbase:GetCountry())
     if self.LandRouting then

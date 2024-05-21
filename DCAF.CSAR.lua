@@ -2341,8 +2341,8 @@ local function rtbNow(sg, rtbLocation)
         else
             alt = Feet(2000)
         end
-        local _, waypoints = RTBNow(sg.Group, rtbLocation.Source, nil, alt)
-        local wpLanding = waypoints[#waypoints]
+        local _, waypoints = RTBNow(sg.Group, rtbLocation.Source, true, nil, alt)
+        -- local wpLanding = waypoints[#waypoints]
         MissionEvents:OnAircraftLanded(onLandedHomeplate)
         return sg
     end
@@ -2379,7 +2379,7 @@ local function rtbNow(sg, rtbLocation)
 
     if rtbLocation then
         WaypointCallback(wpClimb, function()
-            RTBNow(sg.Group, rtbLocation.Source, nil, altHigh) -- onLandedHomeplate, altHigh)
+            RTBNow(sg.Group, rtbLocation.Source, true, nil, altHigh) -- onLandedHomeplate, altHigh)
             MissionEvents:OnAircraftLanded(onLandedHomeplate)
         end)
     end
@@ -3966,6 +3966,3 @@ function DCAF.CSAR.BuildF10Menu(caption, scope, parentMenu)
     -- add 'CSAR' menu when distressed group is created
     -- start CSAR mission
 end
-
-
-
