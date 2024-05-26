@@ -2573,10 +2573,6 @@ function getRefPoint(source, coalition)
 end
 
 function getZone( source )
-if source == "Beirut-Rafic Hariri" then
-Debug("nisse - getZone :: (aaa) source: " .. DumpPretty(source))
-end
-
     if isZone(source) then
         return source end
 
@@ -2584,14 +2580,7 @@ end
         return end
 
     local zone = ZONE:FindByName(source)
-if source == "Beirut-Rafic Hariri" then
-Debug("nisse - getZone :: (bbb) source: " .. DumpPretty(source)  .. " :: zone: " .. DumpPretty(zone))
-end
-        
     if zone then
-if source == "Beirut-Rafic Hariri" then
-Debug("nisse - getZone :: (ccc) source: " .. DumpPretty(source)  .. " :: zone: " .. DumpPretty(zone))
-end
         return zone end
 
     local group = getGroup(source)
