@@ -10958,21 +10958,19 @@ local function buildControllerTankerMenus(caption, scope, parentMenu)
                 else
                     airdromes = tankerInfo.Airbases
                 end
-                local rtbMenu
-                if airdromes and #airdromes > 1 then
-                    if group then
-                        rtbMenu = MENU_GROUP:New(group, "RTB " .. tanker.DisplayName, menuTrack)
-                    else
-                        rtbMenu = MENU_COALITION:New(dcafCoalition, "RTB " .. tanker.DisplayName, menuTrack)
-                    end
-                end
 
                 local function rtbAirdromes(menuTextPrefix, allowPostpone)
+                    local menu
+                    if group then
+                        menu = MENU_GROUP:New(group, menuTextPrefix, menuTrack)
+                     else
+                        menu = MENU_COALITION:New(dcafCoalition, menuTextPrefix, menuTrack)
+                     end
                     for _, airServiceBase in ipairs(airdromes) do
                         local airbaseName = airServiceBase.Airbase.AirbaseName
                         local menuText = menuTextPrefix .. " >> " .. airbaseName
+                        local rtbMenu = DCAF.MENU:New(menu or menuTrack)
                         if airServiceBase.RTBRoutes and #airServiceBase.RTBRoutes > 0 then
-                            local rtbMenu = DCAF.MENU:New(rtbMenu or menuTrack)
                             for _, rtbRoute in ipairs(airServiceBase.RTBRoutes) do
                                  if group then
                                     rtbMenu:GroupCommand(group, menuText .. " (" .. rtbRoute.Name .. ")", sendTankerHome, airbaseName, rtbRoute, allowPostpone)
