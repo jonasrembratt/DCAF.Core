@@ -1767,7 +1767,7 @@ function DCAF.AIRAC:GetLocation(ident)
     if not navaid then
         return end
 
-    local location = DCAF.Location:NewNamed(ident, navaid, false)
+    local location = DCAF.Location:NewNamed(ident, navaid, nil, false)
     location.Coordinate = navaid.Coordinate
     return location
 end
@@ -1826,17 +1826,12 @@ function DCSMAP:IsValid(map)
 end
 
 function DCAF.NAVAID:New(map, name, coordinate, type, hidden)
-    if not isAssignedString(map) then
-        error("DCAF.NAVAID:New :: `map` must be assigned string") end
-    if not DCSMAP:IsValid(map) then
-        error("DCAF.NAVAID:New :: unknown map: " .. map) end
-    if not isAssignedString(name) then
-        error("DCAF.NAVAID:New :: `name` must be assigned string") end
-    if not isClass(coordinate, COORDINATE.ClassName) then
-        error("DCAF.NAVAID:New :: `coordinate` must be type: " .. COORDINATE.ClassName) end
+    if not isAssignedString(map) then return Error("DCAF.NAVAID:New :: `map` must be assigned string") end
+    if not DCSMAP:IsValid(map) then return Error("DCAF.NAVAID:New :: unknown map: " .. map) end
+    if not isAssignedString(name) then return Error("DCAF.NAVAID:New :: `name` must be assigned string") end
+    if not isClass(coordinate, COORDINATE) then return Error("DCAF.NAVAID:New :: `coordinate` must be type: " .. COORDINATE.ClassName) end
     if isAssignedString(type) then
-        if not DCAF.NAVAID_TYPE:IsValid(type) then
-            error("DCAF.NAVAID:New :: invalid `type`: " .. DumpPretty(type)) end
+        if not DCAF.NAVAID_TYPE:IsValid(type) then return Error("DCAF.NAVAID:New :: invalid `type`: " .. DumpPretty(type)) end
     else
         type = DCAF.NAVAID_TYPE.FIX
     end
@@ -1861,27 +1856,21 @@ function DCAF.NAVAID:NewFix(name, coordinate, map)
 end
 
 function DCAF.NAVAID:NewVOR(name, frequency, coordinate, map)
-    if not isNumber(frequency) then
-        error("DCAF.NAVAID:NewVOR :: `frequency` must be a number but was: " .. DumpPretty(frequency)) end
-
+    if not isNumber(frequency) then return Error("DCAF.NAVAID:NewVOR :: `frequency` must be a number but was: " .. DumpPretty(frequency)) end
     local vor = DCAF.NAVAID:New(map or _DCAF_defaultMap, name, coordinate, DCAF.NAVAID_TYPE.VOR)
     vor.Frequency = frequency
     return vor
 end
 
 function DCAF.NAVAID:NewDME(name, frequency, coordinate, map)
-    if not isNumber(frequency) then
-        error("DCAF.NAVAID:NewDME :: `frequency` must be a number but was: " .. DumpPretty(frequency)) end
-
+    if not isNumber(frequency) then return Error("DCAF.NAVAID:NewDME :: `frequency` must be a number but was: " .. DumpPretty(frequency)) end
     local dme = DCAF.NAVAID:New(map or _DCAF_defaultMap, name, coordinate, DCAF.NAVAID_TYPE.DME)
     dme.Frequency = frequency
     return dme
 end
 
 function DCAF.NAVAID:NewTACAN(name, channel, mode, coordinate, map)
-    if not isNumber(channel) then
-        error("DCAF.NAVAID:NewTACAN :: `channel` must be a number but was: " .. DumpPretty(channel)) end
-        
+    if not isNumber(channel) then return Error("DCAF.NAVAID:NewTACAN :: `channel` must be a number but was: " .. DumpPretty(channel)) end
     if mode == nil then
         mode = "X"
     end
@@ -1890,7 +1879,7 @@ function DCAF.NAVAID:NewTACAN(name, channel, mode, coordinate, map)
     elseif not DCAF_TACAN:IsValidMode(mode) then
         error("DCAF.NAVAID:NewTACAN :: invalid `mode`: " .. DumpPretty(mode))
     end
-    
+
     local tacan = DCAF.NAVAID:New(map or _DCAF_defaultMap, name, coordinate, DCAF.NAVAID_TYPE.TACAN)
     tacan.Channel = channel
     tacan.Mode = mode
@@ -1902,9 +1891,7 @@ function DCAF.NAVAID:IsEmitter()
 end
 
 function DCAF.NAVAID:NewVORTAC(name, frequency, channel, mode, coordinate, map)
-    if not isNumber(frequency) then
-        error("DCAF.NAVAID:NewVORTAC :: `frequency` must be a number but was: " .. DumpPretty(frequency)) end
-
+    if not isNumber(frequency) then return Error("DCAF.NAVAID:NewVORTAC :: `frequency` must be a number, but was: " .. DumpPretty(frequency)) end
     local vortac = DCAF.NAVAID:NewTACAN(name, channel, mode, coordinate, map)
     vortac.Frequency = frequency
     return vortac
@@ -1912,11 +1899,11 @@ end
 
 function DCAF.NAVAID:AirTurnpoint(speedKmph, altitudeMeters, tasks)
     if not isNumber(speedKmph) and isNumber(self.SpeedKt) then
-        speedKmph = Knots(self.speedKt) end
-
+        speedKmph = UTILS.KnotsToKmph(self.SpeedKt)
+    end
     if not isNumber(altitudeMeters) and isNumber(self.AltFt) then
-        altitudeMeters = Feet(self.AltFt) end
-           
+        altitudeMeters = Feet(self.AltFt)
+    end
     return airTurnpoint(self.Coordinate, self.Name, speedKmph, altitudeMeters)
 end
 
@@ -1982,6 +1969,27 @@ function DCAF.AIRAC:DrawNavaids(map, coalition, text, color, size)
     end
 end
 
+function DCAF.AIRAC:AddWaypoint(map, type, name, location, hidden)
+    if not DCAF.AIRAC.DATA then return Error("DCAF.AIRAC:AddWaypoint :: No AIRAC data file has been loaded (DCAF.AIRAC.DATA object is missing") end
+    if not isAssignedString(map) then
+        map = env.mission.theatre
+    end
+    if not isAssignedString(name) then return Error("DCAF.AIRAC:AddWaypoint :: `name` must be assigned string, but was: " .. DumpPretty(name)) end
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return Error("DCAF.AIRAC:AddWaypoint :: `location` must be a valid location, but was: " .. DumpPretty(location)) end
+    local airacMap = DCAF.AIRAC.DATA.Maps[map]
+    if not airacMap then
+        airacMap = DCAF.AIRAC.MAP:New()
+        DCAF.AIRAC.DATA.Maps[map] = airacMap
+    end
+
+    local coordinate = validLocation:GetCoordinate()
+    local waypoint = DCAF.NAVAID:New(map, name, coordinate, type, hidden)
+    airacMap[name] = waypoint
+    Debug("DCAF.AIRAC:AddWaypoint :: " .. map .. "::" .. name .. " (" .. type .. ")")
+    return waypoint
+end
+
 -- //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 --                                                                        AIR ROUTES 
 -- //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2008,17 +2016,15 @@ local function genericRouteName()
     return "ROUTE-" .. Dump(DCAF_ROUTE_COUNT)
 end
 
-function DCAF.AIR_ROUTE:New(name, route, phase, proc)
-    if not isAssignedString(route) then
-        error("DCAF.ROUTE:New :: `route` must be assigned string") end
-
+function DCAF.AIR_ROUTE:New(name, route, phase, proc, debug)
+    if not isAssignedString(route) then return Error("DCAF.ROUTE:New :: `route` must be assigned string, but was: " .. DumpPretty(route)) end
     local idents = {}
     for ident in route:gmatch("%S+") do
         table.insert(idents, ident)
     end
 -- nisse --
 Debug("DCAF.AIR_ROUTE:New :: name: " .. name .." :: idents: " .. DumpPretty(idents))
-    local airRoute = DCAF.AIR_ROUTE:NewFromNavaids(name, idents, phase, proc)
+    local airRoute = DCAF.AIR_ROUTE:NewFromNavaids(name, idents, phase, proc, debug)
     airRoute.RouteText = route
     return airRoute
 end
@@ -2326,12 +2332,8 @@ local prevIdent
 ---   <ident> := <alphanumeric characters>'-R'<radial; 3 char><distance; 2 char>   (eg. SUP-R02519)
 ---   <altitude> := 'F'<numeric>  (eg. F250; flight level 250)
 ---   <altitude> := 'A'<numeric>  (eg. A250; flight level 250)
-function AIRAC_IDENT:New(s)
+function AIRAC_IDENT:New(s, debug)
     local arcQualifier = "arc%("
--- local nisse_debug = string.find(s, arcQualifier)
--- if nisse_debug then
--- Debug("nisse_debug - AIRAC_IDENT:New :: s: '" .. s .. "'")
--- end
 
     if not isAssignedString(s) then
         error("IDENT:New :: `s` must be assigned string but was: " .. DumpPretty(s)) end
@@ -2341,18 +2343,19 @@ function AIRAC_IDENT:New(s)
         table.insert(items, e)
     end
 
--- if nisse_debug then
--- Debug("nisse_debug - AIRAC_IDENT:New :: items: '" .. DumpPretty(items))
--- end    
+if debug then
+Debug("nisse_debug - AIRAC_IDENT:New :: items: '" .. DumpPretty(items))
+end
 
     local function eatNum(s, start)
-        -- local starts, ends = string.find(s, "%d+")
+if debug then
+Debug("nisse - s: " .. s)
+end
         local starts, len = string.find(s, "%d+%.?%d*")
         if starts == nil then
             return end
 
         local subNum = string.sub(s, starts, len)
-        -- local num = tonumber(string.sub(s, starts, ends))
         local num = tonumber(subNum)
         return num, len+1
     end
@@ -2439,7 +2442,7 @@ function AIRAC_IDENT:New(s)
         sRadial = string.sub(sRadial, 1, 3)
         ident.NavaidName = navaidName 
         ident.Radial = tonumber(sRadial)
-if nisse_debug then
+if debug then
 Debug("nisse - parse :: ident.Name: '" .. ident.Name .. "' :: sDistance: " .. Dump(sDistance))
 end
         ident.Distance = eatNum(sDistance) --tonumber(sDistance)
@@ -2466,49 +2469,86 @@ end
     local ident = DCAF.clone(AIRAC_IDENT)
     ident.Name = items[1]
     ident = parse(ident)
-    if #items == 1 then
-        return ident end
-    
-    local item = items[2]
-    local speedKt, alt, altUnit
-    local qualifier = string.sub(item, 1, 1)
-    if qualifier == 'N' then
-        -- speed in knots...
-        local kt, next = eatNum(item, 2)
-        item = string.sub(item, next)
-        ident.SpeedKt = kt
-    elseif qualifier == 'M' then
-        -- speed in MACH...
-        local m, next = eatNum(item, 2)
-        ident.SpeedKt = MachToKnots(m/100)
-        item = string.sub(item, next)
-    end
-    if string.len(item) == 0 then
-        return ident end
+    if #items == 1 then return ident end
 
-    qualifier = string.sub(item, 1, 1)
-    if qualifier == 'F' --[[or qualifier == 'A']] then
-        -- altitude in Flight level (feet / 100)...
-        local ft, next = eatNum(item, 2)
-        ident.AltFt = ft * 100
-        item = string.sub(item, next)
-    elseif qualifier == 'S' --[[or qualifier == 'M']] then
-        -- altitude in standard metric (meters / 10)...
-        local m, next = eatNum(item, 2)
-        ident.AltFt = UTILS.MetersToFeet(m * 10)
-        item = string.sub(item, next)
+    local itemIdx = 1
+
+    local function nextItem()
+        itemIdx = itemIdx + 1
+        return items[itemIdx]
     end
-    prevIdent = ident
+
+    local function parseSpeedKnots(item, qualifier)
+        if qualifier ~= 'N' then return end
+        -- speed in knots...
+        local n = eatNum(item, 2)
+        ident.SpeedKt = n
+        if debug then
+            Debug("nisse - ROUTE :: 'N' :: n: " .. n .. " :: ident.SpeedKt: " .. ident.SpeedKt)
+        end
+        return true
+    end
+
+    local function parseSpeedMach(item, qualifier)
+        if qualifier ~= 'M' then return end
+        -- speed in MACH...
+        local m = eatNum(item, 2)
+        ident.SpeedKt = MachToKnots(m/100)
+        if debug then
+            Debug("nisse - ROUTE :: 'M' :: m: " .. m .. " :: ident.SpeedKt: " .. ident.SpeedKt)
+        end
+        return true
+    end
+
+    local function parseAltitudeFlightLevel(item, qualifier)
+        if qualifier ~= 'F' then return end
+        -- altitude in Flight level (feet / 100)...
+        local f = eatNum(item, 2)
+        ident.AltFt = f * 100
+        if debug then
+            Debug("nisse - ROUTE :: 'F' :: f: " .. f .. " :: ident.AltFt: " .. ident.AltFt)
+        end
+        return true
+    end
+
+    local function parseAltitudeMeters(item, qualifier)
+        if qualifier ~= 'S' then return end
+        -- altitude in standard metric (meters / 10)...
+        local s = eatNum(item, 2)
+        ident.AltFt = UTILS.MetersToFeet(s * 10)
+        if debug then
+            Debug("nisse - ROUTE :: 'S' :: s: " .. s .. " :: ident.AltFt: " .. ident.AltFt)
+        end
+        return true
+    end
+
+    local function parseItem(item)
+        if not item then return end
+        local qualifier = string.sub(item, 1, 1)
+        if debug then
+            Debug("nisse - ROUTE :: parseItem :: item: " .. item .. " :: qualifier: " .. qualifier)
+        end
+        return parseSpeedKnots(item, qualifier)
+            or parseSpeedMach(item, qualifier)
+            or parseAltitudeFlightLevel(item, qualifier)
+            or parseAltitudeMeters(item, qualifier)
+    end
+
+    local item = nextItem()
+    while parseItem(item) do
+        item = nextItem()
+    end
+
     return ident
 end
 
 function AIRAC_IDENT:AirTurnpoint(speedKmph, altitudeMeters, tasks)
     if not isNumber(speedKmph) and isNumber(self.SpeedKt) then
-        speedKmph = Knots(self.SpeedKt) end
-
+        speedKmph = UTILS.KnotsToKmph(self.SpeedKt)
+    end
     if not isNumber(altitudeMeters) and isNumber(self.AltFt) then
-        altitudeMeters = Feet(self.AltFt) end
-
+        altitudeMeters = Feet(self.AltFt)
+    end
     return airTurnpoint(self.Coordinate, self.Name, speedKmph, altitudeMeters)
 end
 
@@ -2516,7 +2556,7 @@ function AIRAC_IDENT:IsRestricted()
     return isNumber(self.AltFt) or isNumber(self.SpeedKt)
 end
 
-function DCAF.AIR_ROUTE:NewFromNavaids(name, idents, phase, proc)
+function DCAF.AIR_ROUTE:NewFromNavaids(name, idents, phase, proc, debug)
     if not isAssignedString(name) then
         name = genericRouteName()
     end
@@ -2622,11 +2662,13 @@ Debug("nisse - generateArcsAndTurns ::wp:" .. DumpPretty(wp))
     local spawnMethod = DCAF.AIR_ROUTE_SPAWNMETHOD.Air
     local ignore = false
     local lastAlt
+    local prevSpeedKt
+    local prevAltFt
     for i = 1, #idents, 1 do
         local sIdent = idents[i]
         local waypoint
         if isAssignedString(sIdent) then
-            local ident = AIRAC_IDENT:New(sIdent)
+            local ident = AIRAC_IDENT:New(sIdent, debug)
             if not ident then
                 error("Route ident #" .. Dump(i) .. " is invalid: '" .. Dump(sIdent) .. "'") end
 
@@ -2676,7 +2718,11 @@ Debug("nisse - generateArcsAndTurns ::wp:" .. DumpPretty(wp))
             error("DCAF.AIR_ROUTE:New :: idents[" .. Dump(i) .. "] ('" .. Dump(sIdent) .. "') was neither type " .. AIRAC_IDENT.ClassName .. ", " .. DCAF.NAVAID.ClassName .. ", nor " .. AIRBASE.ClassName) end
 
         if not ignore then
+            waypoint.AltFt = waypoint.AltFt or prevAltFt
+            waypoint.SpeedKt = waypoint.SpeedKt or prevSpeedKt
             local wp = makeRouteWaypoint(waypoint, i)
+            prevAltFt = waypoint.AltFt
+            prevSpeedKt = waypoint.SpeedKt
             if not wp.alt then
                 wp.alt = lastAlt
             end

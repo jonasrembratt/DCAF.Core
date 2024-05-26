@@ -88,13 +88,6 @@ local DCAF_JammedGroup = {
 local Count_JammedGroups = 0
 
 function DCAF_JammedGroup:NewOrUpdate(group, jammer, jammerStrength)
-
--- nisse - lobe
-if group.GroupName == 'RSAM-SA6-Tabqa-3#001' then
--- Debug("DCAF_JammedGroup:NewOrUpdate :: group: " .. group.GroupName)
-Debug("nisse - WTF?! :: 'RSAM-SA6-Tabqa-3' should not be jammed! :: " .. DCAF.StackTrace())
-end
-
     local jg = DCAF_JammedGroups[group.GroupName]
     if not jg then
         jg = DCAF.clone(DCAF_JammedGroup)
@@ -136,7 +129,7 @@ function DCAF_JammedGroup.Remove(group, jammer)
     if not jg then
         return end
 
-Debug("nisse - DCAF_JammedGroup.Remove :: group.GroupName: " .. group.GroupName)
+    -- jammer:_messageDebug("nisse - DCAF_JammedGroup.Remove :: group.GroupName: " .. group.GroupName)   
     tableRemoveWhere(jg.Jammers, function(i) return i.Name == jammer.Name end)
     if #jg.Jammers == 0 then
         enable(jg, true, 100, true)
@@ -211,13 +204,13 @@ function DCAF_JammingScheduler:Start()
             elseif now > jg.SuppressUntil then
                 enable(jg, true, effectiveRange)
             end
-Debug("nisse - DCAF_JammingScheduler:Start_jam :: _debug_visualize: " .. Dump(_debug_visualize))
+            -- self:_messageDebug("nisse - DCAF_JammingScheduler:Start_jam :: _debug_visualize: " .. Dump(_debug_visualize))
             if _debug_visualize then
                 local alpha = math.max(effectiveRange, .8)
                 if not jg._isSuppressed then alpha = 0 end
                 local radarUnits = DCAF_RadarUnits[jg.Group.GroupName]
                 for _, radarUnit in ipairs(radarUnits) do
-Debug("nisse - DCAF_JammingScheduler:Start_jam :: radarUnit: " .. radarUnit.UnitName)
+                    -- self:_messageDebug("nisse - DCAF_JammingScheduler:Start_jam :: radarUnit: " .. radarUnit.UnitName)
                     if radarUnit._jammedVizID then
                         COORDINATE:RemoveMark(radarUnit._jammedVizID)
                     end
@@ -472,12 +465,13 @@ local function hasRadar(group)
     for _, unit in ipairs(units) do
         local typeName = unit:GetTypeName()
         local info = DCAF_GBADDatabase[typeName]
-Debug("nisse - hasRadar :: info: " .. DumpPretty(info))
+        
+-- Debug("nisse - hasRadar :: info: " .. DumpPretty(info))
         if info and info:IsRadar() then
             radarUnits[#radarUnits+1] = unit
         end
     end
-Debug("nisse - hasRadar :: group: " .. group.GroupName .. " :: radarUnits: " .. DumpPretty(radarUnits))
+-- Debug("nisse - hasRadar :: group: " .. group.GroupName .. " :: radarUnits: " .. DumpPretty(radarUnits))
     DCAF_RadarUnits[group.GroupName] = radarUnits
     if #radarUnits > 0 then
         return radarUnits end
@@ -602,7 +596,7 @@ function DCAF.Jammer:JamFromTrack(locLobe, locTrack, trackAltitude, trackLength,
         return Warning("DCAF.Jammer:JamFromTrack :: the distance between pattern location and ECM location (" .. UTILS.MetersToNM(dtt) .. ") exceeds the jammer max range (" .. UTILS.MetersToNM(self.JammerRangeMax) .. ")") end
 
     radius = self:GetLobeRadius(radius)
-Debug("nisse - DCAF.Jammer:JamFromTrack :: locLobe: " .. Dump(locLobe.Name))
+    self:_messageDebug("nisse - DCAF.Jammer:JamFromTrack :: locLobe: " .. Dump(locLobe.Name))
     self._locLobe = locLobe
     self._radiusECM = radius
 
@@ -668,7 +662,7 @@ function DCAF.Jammer:IsJamming()
 end
 
 function DCAF.Jammer:StartJammer(locLobe, radius, delay, types)
-Debug("nisse - DCAF.Jammer:StartJammer :: locLobe: " .. DumpPretty(locLobe or self._locLobe))
+    self:_messageDebug("nisse - DCAF.Jammer:StartJammer :: locLobe: " .. DumpPretty(locLobe or self._locLobe))
     if self._jammerScheduleID then
         return self end
 

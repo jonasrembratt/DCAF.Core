@@ -24,7 +24,8 @@ local TTSChannel_DEFAULTS = {
     Modulation = radio.modulation.AM,
     Callsign = "TOP DOG",
     Coalition = Coalition.Blue,
-    LocationsOmitMapElement = false
+    MGRS_OmitMapComponent = false,
+    _variables = {}
 }
 
 DCAF.TTSVoices = {
@@ -106,7 +107,7 @@ DCAF.TTSChannel = {
     Gender = "female",
     Culture = "en-US",
     Coalition = TTSChannel_DEFAULTS.Coalition,
-    Interval = Minutes(1) -- ensures no message gets sent less than this interval from the last one
+    Interval = 1 -- Minutes(1) -- ensures no message gets sent less than this interval from the last one
 }
 
 local function initTTSChannel(channel, callsign, frequency, modulation, coalition)
@@ -114,6 +115,8 @@ local function initTTSChannel(channel, callsign, frequency, modulation, coalitio
     channel.Frequency = frequency or DCAF.TTSChannel.Frequency
     channel.Modulation = modulation or DCAF.TTSChannel.Modulation
     local dcsCoalition = Coalition.Resolve(coalition or DCAF.TTSChannel.Coalition, true)
+    channel.MGRS_OmitMapComponent = TTSChannel_DEFAULTS.MGRS_OmitMapComponent
+    channel._variables = TTSChannel_DEFAULTS._variables
     if not dcsCoalition then
         error("initTTSChannel :: cannot resolve coalition: " .. DumpPretty(coalition)) end
 
@@ -143,6 +146,20 @@ function DCAF.TTSChannel:New(callsign, frequency, modulation, coalition)
     local channel = DCAF.clone(DCAF.TTSChannel)
     initTTSChannel(channel, callsign, freq, mod, coalition)
     return channel
+end
+
+--- Creates a default variable to be recognized in transmissions
+-- @param #string name - name of variable (eg. "IDO")
+-- @param #string value - value to be assigned to variable (eg. "COURTSIDE")
+function DCAF.TTSChannel.InitDefaultVariable(name, value)
+    TTSChannel_DEFAULTS._variables[name] = value
+end
+
+--- Creates a variable to be recognized in transmissions
+-- @param #string name - name of variable (eg. "IDO")
+-- @param #string value - value to be assigned to variable (eg. "COURTSIDE")
+function DCAF.TTSChannel:InitVariable(name, value)
+    self._variables[name] = value
 end
 
 --- Tunes a frequency/modulation. Current frequency can be restored with Detune()
@@ -259,8 +276,10 @@ end
 -- @param #string text - The textual message to be transmitted
 function DCAF.TTSChannel:Message(text, callsign, isActual, dash, isReplay)
 
+Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
+
     if not isAssignedString(text) then
-        return Warning("DCAF.TTSChannel:Message :: `text` must be assigned string, but was: " .. DumpPretty(text)) end
+        return Error("DCAF.TTSChannel:Message :: `text` must be assigned string, but was: " .. DumpPretty(text)) end
 
     local function substituteVariables()
         callsign = callsign or self.Callsign
@@ -268,10 +287,20 @@ function DCAF.TTSChannel:Message(text, callsign, isActual, dash, isReplay)
             callsign = callsign .. " Actual"
         end
         text = string.gsub(text, "%[CALLSIGN%]", callsign)
-        local bullseyeName = DCAF.GetBullseyeName(self.Coalition)
-        text = string.gsub(text, "%[BE%]", bullseyeName)
-        text = string.gsub(text, "%[BULLSEYE%]", bullseyeName)
-        -- todo support more variables?
+        local greeting = self:GetGreetingPhrase()
+        if greeting then
+            text = string.gsub(text, "%[GREETING%]", greeting)
+        end
+        local farewell = self:GetFarewellPhrase()
+        if farewell then
+            text = string.gsub(text, "%[FAREWELL%]", farewell)
+        end
+        for key, value in pairs(self._variables) do
+            text = string.gsub(text, "%[".. key .. "%]", value)
+        end
+        for key, value in pairs(self._variables) do
+            text = string.gsub(text, "%[".. key .. "%]", value)
+        end
         return text
     end
 
@@ -362,24 +391,35 @@ function DCAF.TTSChannel:Message(text, callsign, isActual, dash, isReplay)
             local coord = getCoordinate(ident)
             if coord then
                 local kp
-                local omitMapElement = self.LocationsOmitMapElement or TTSChannel_DEFAULTS.LocationsOmitMapElement
+                local omitMapElement = self.MGRS_OmitMapComponent or TTSChannel_DEFAULTS.MGRS_OmitMapComponent
                 if q == KEYPAD_QUALIFIER then
                     local map, grid, keypad = coord:ToKeypad()
-                    if not omitMapElement then
+                    if not map then
+                        kp = "KEYPAD ERROR"
+                    elseif not omitMapElement then
                         kp = "Grid! " .. PhoneticAlphabet:Convert(map .. " " .. grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad, true)
                     else
                         kp = "Grid! " .. PhoneticAlphabet:Convert(grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad, true)
                     end
                 elseif q == MGRS_QUALIFIER then
-                    local map, grid, x, y = coord:ToMGRS()
-                    if not omitMapElement then
-                        kp = "Grid! " .. PhoneticAlphabet:Convert(map .. " " .. grid .. " " .. x .. " " .. y, true)
+                    local mgrs = coord:ToMGRS()
+Debug("nisse - DCAF.TTSChannel_substituteLocations :: map: " .. DumpPretty(mgrs))
+                    if not mgrs then
+                        kp = "GRID ERROR"
+                    elseif not omitMapElement then
+                        kp = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Map .. " " .. mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, true)
+                        kp = kp .. " elevation " .. PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), true)
                     else
-                        kp = "Grid! " .. PhoneticAlphabet:Convert(map .. " " .. grid .. " " .. x .. " " .. y, true)
+                        kp = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, true)
+                        kp = kp .. " elevation " .. PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), true)
                     end
                 elseif q == BULLSEYE_QUALIFIER then
                     local bearing, distanceNM, name = DCAF.GetBullseye(coord, self.Coalition)
-                    kp = name .. ". " .. PhoneticAlphabet:Convert(tostring(UTILS.Round(bearing))) .. ". " .. UTILS.Round(distanceNM)
+                    if bearing then 
+                        kp = name .. ". " .. PhoneticAlphabet:Convert(tostring(UTILS.Round(bearing))) .. ". " .. UTILS.Round(distanceNM)
+                    else
+                        kp = "BULLSEYE ERROR"
+                    end
                 end
                 if kp then
                     out = out .. kp
@@ -432,11 +472,9 @@ function DCAF.TTSChannel:Message(text, callsign, isActual, dash, isReplay)
             gender = self.Gender
             culture = self.Culture
         end
-        text = substituteVariables()
-Debug("nisse - DCAF.TTSChannel_send / substituteVariables :: text: " .. Dump(text))
         text = substituteLocations()
-Debug("nisse - DCAF.TTSChannel_send / substituteLocations :: text: " .. Dump(text))
         text = substitutePhonetic()
+        text = substituteVariables()
         local text_processed = text
         self:SetVoiceNormal()
 
@@ -483,14 +521,38 @@ Debug("nisse - DCAF.TTSChannel_send / substituteLocations :: text: " .. Dump(tex
             end
         end
 
-        if self._nextTransmit and now < self._nextTransmit then
-            delay = self._nextTransmit - now
+        if not isSimulatedTTS then
+            if self._nextTransmit and now < self._nextTransmit then
+                delay = self._nextTransmit - now
+            end
+            self._nextTransmit = now + self.Interval + delay
         end
-        self._nextTransmit = now + self.Interval + delay
         DCAF.delay(doSend, delay)
     end
 
     send()
+end
+
+function DCAF.TTSChannel:GetGreetingPhrase()
+    local time = UTILS.SecondsToMidnight()
+    if time > 15 then return "Good evening" end
+    if time > 12 then return "Good morning" end
+    if time > 6 then return "Good afternoon" end
+    return "Good evening"
+end
+
+function DCAF.TTSChannel:GetFarewellPhrase()
+    local night = {"Have a good night", "Good Night", "Have a good night", "Bye Bye", "Bye!", "Thank You!"}
+    local morning = {"Have a good morning", "Enjoy your moring", "Good Morning", "Bye Bye", "Thank You"}
+    local evening = {"Have a good evening", "Good evening", "Have a good night", "Bye Bye", "Bye!", "Thank You!"}
+    local day = {"Good Day!", "Have a good good day!", "Enjoy your day", "Bye for now", "Bye Bye", "Bye!", "Thank You!"}
+
+    local time = UTILS.SecondsToMidnight()
+    if time > 15 then return listRandomItem(night) end
+    if time > 12 then return listRandomItem(morning) end
+    if time > 6 then return listRandomItem(day) end
+    if time > 2 then return listRandomItem(evening) end
+    return listRandomItem(night)
 end
 
 --- Prevents actual text-to-speech synthetization, preventing unnecessary cost for the Google TTS service
@@ -501,16 +563,16 @@ function DCAF.TTSChannel.SimulateAllTTS(value, multiLine, duration)
     Debug("nisse - DCAF.TTSChannel.SimulateAllTTS :: duration: " .. Dump(DCAF.TTSChannel.TTS_Simulated_Duration))
 end
 
-function DCAF.TTSChannel.SetDefault_LocationsOmitMapElement(value)
+function DCAF.TTSChannel.InitDefaultMGRSOmitMapComponent(value)
     if value == nil then value = true end
-    if not isBoolean(value) then return Error("DCAF.TTSChannel.SetDefault_LocationsOmitMapElement :: `value` must be true/false, but was: " .. DumpPretty(value)) end
-    Debug(DCAF.TTSChannel.ClassName .. " :: sets default value: LocationsOmitMapElement = " .. Dump(value))
-    TTSChannel_DEFAULTS.LocationsOmitMapElement = value
+    if not isBoolean(value) then return Error("DCAF.TTSChannel.SetDefault_MGRS_OmitMapComponent :: `value` must be true/false, but was: " .. DumpPretty(value)) end
+    Debug(DCAF.TTSChannel.ClassName .. " :: sets default value: MGRS_OmitMapComponent = " .. Dump(value))
+    TTSChannel_DEFAULTS.MGRS_OmitMapComponent = value
 end
 
-function DCAF.TTSChannel:InitLocationsOmitMapElement(value)
-    if not isBoolean(value) then return Error("DCAF.TTSChannel:InitLocationsOmitMapElement :: `value` must be true/false, but was: " .. DumpPretty(value)) end
-    self.LocationsOmitMapElement = value
+function DCAF.TTSChannel:InitMGRS_OmitMapComponent(value)
+    if not isBoolean(value) then value = true end
+    self.MGRS_OmitMapComponent = value
     return self
 end
 
@@ -522,7 +584,6 @@ Debug("DCAF.TTSChannel:SimulateTTS :: Is_TTS_Simulated: " .. Dump(self.Is_TTS_Si
 end
 
 function DCAF.TTSChannel:Send(text, callsign, isActual, dash, isReplay)
-Debug("DCAF.TTSChannel:Send :: text: " .. Dump(text))
     return self:Message(text, callsign, isActual, dash, isReplay)
 end
 
