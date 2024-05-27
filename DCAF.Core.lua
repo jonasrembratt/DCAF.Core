@@ -6,6 +6,8 @@
 
 BASE:E("////////// Loading DCAF.Core.lua... \\\\\\\\\\")
 
+-- if os then math.randomseed(os.clock()*100000000000) end
+
 DCAF = {
     Trace = true,
     TraceToUI = false,
@@ -78,6 +80,32 @@ local function deepCopy(object)
   end
   local objectreturn = _copy( object )
   return objectreturn
+end
+
+function random(min, max)
+    local lowNum, highNum
+    if not max then
+        highNum = min
+        lowNum = 1
+    else
+        lowNum = min
+        highNum = max
+    end
+    local total = 1
+    if math.abs(highNum - lowNum + 1) < 50 then -- if total values is less than 50
+        total = math.modf(50/math.abs(highNum - lowNum + 1)) -- make x copies required to be above 50
+    end
+    local choices = {}
+    for i = 1, total do -- iterate required number of times
+        for x = lowNum, highNum do -- iterate between the range
+            choices[#choices +1] = x -- add each entry to a table
+        end
+    end
+    local rtnVal = math.random(#choices) -- will now do a math.random of at least 50 choices
+    for i = 1, 10 do
+        rtnVal = math.random(#choices) -- iterate a few times for giggles
+    end
+    return choices[rtnVal]
 end
 
 function DCAF.clone(template, deep, suppressDebugData)
@@ -1438,11 +1466,19 @@ function COORDINATE:ToMGRS(precision)
     if not isNumber(precision) then precision = 5 end
     local mgrs = UTILS.tostringMGRS( MGRS, precision )
     if not mgrs then return end
-    return stringSplit(mgrs)
+    local split = stringSplit(mgrs)
+    local elevationMeter = self:GetLandHeight()
+    return {
+        Map = split[1],
+        Grid = split[2],
+        X = split[3],
+        Y = split[4],
+        Elevation = UTILS.MetersToFeet(elevationMeter)
+    }
 end
 
 --- Calculates and returns coordinate's corresponding GMRS grid and keypad
--- @returns Three values: map (eg. "36S"), grid (eg. "DV26"), and keypad [1-9]
+-- @returns Object: { Map, Grid, Keypad } (eg. { Map = "36S", Grid = "DV26", Keypad = 5 }
 function COORDINATE:ToKeypad()
     local items = self:ToMGRS(3)
     if not items then return end
@@ -1456,7 +1492,11 @@ function COORDINATE:ToKeypad()
 -- Debug("nisse - COORDINATE:ToKeypad() :: x: " .. x .. " :: xo: " .. xo .. " y: " .. y .. " :: yo: " .. yo )
     local keypad = xo + yo
 -- Debug("nisse - COORDINATE:ToKeypad() :: grid: " .. grid .. " :: keypad: " .. Dump(keypad) )
-    return items[1], grid, keypad
+    return {
+        Map = items[1],
+        Grid = grid,
+        Keypad = keypad
+    }
 end
 
 --- Activates groups in a staggered fashion (applying a delay between each activation)
@@ -1472,7 +1512,7 @@ function activateGroupsStaggered(groups, interval, onActivatedFunc, delay, order
     if order ~= true and not isAssignedString(order) then
         tableIterateDelayed(groups, function(key, group)
             if not isGroup(group) then return Error("activateGroupsStaggered :: item with key [" .. key .. "] was not a #GROUP :: IGNORES") end
-            if not group:IsActive() then 
+            if not group:IsActive() then
                 group:Activate()
                 if isFunction(onActivatedFunc) then onActivatedFunc(key, group) end
                 Debug("activateGroupsStaggered :: group " .. group.GroupName .. " was activated")
@@ -2154,7 +2194,7 @@ end
 
 function Error( message, value )
     local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
-    BASE:E("DCAF-ERR @"..timestamp.."===> "..tostring(message) .. BASE.Debug.traceback())
+    BASE:E("DCAF-ERR @"..timestamp.."===> "..tostring(message) .. " " .. BASE.Debug.traceback())
     if (DCAF.TraceToUI or DCAF.DebugToUI) then
         MESSAGE:New("DCAF-ERR: "..message):ToAll()
     end
@@ -2498,14 +2538,38 @@ function getStatic( source )
 end
 
 function getAirbase( source )
-    if isClass(source, AIRBASE.ClassName) then
-        return source end
+    if isClass(source, AIRBASE) then return source end
+    if isAssignedString(source) then return AIRBASE:FindByName(source) end
+    if isNumber(source) then return AIRBASE:FindByID(source) end
+end
 
-    if isAssignedString(source) then
-        return AIRBASE:FindByName(source) end
+local RefPointsIndex = {}
 
-    if isNumber(source) then
-        return AIRBASE:FindByID(source) end
+local function getRefPointsIndex(coalition)
+    local index = RefPointsIndex[coalition]
+    if index then return index end
+    index = {}
+    local navPoints = env.mission.coalition[coalition].nav_points
+    for _, navPoint in ipairs(navPoints) do
+        local loc = DCAF.Location:NewNamed(navPoint.callsignStr, COORDINATE:NewFromVec2(navPoint))
+        loc.Type = navPoint.type
+        loc.ID = navPoint.id
+        loc.Properties = navPoint.properties
+        if isAssignedString(navPoint.comment) then loc.Comment = navPoint.comment end
+        index[loc.Name] = loc
+    end
+    RefPointsIndex[coalition] = index
+    return index
+end
+
+function getRefPoint(source, coalition)
+    local validCoalition = Coalition.Resolve(coalition)
+    if not validCoalition then return Error("getRefPoint :: cannot resolve `coalition`: " .. DumpPretty(coalition)) end
+    local index = getRefPointsIndex(validCoalition)
+    return index[source]
+--     local navPoints = env.mission.coalition[validCoalition].nav_points
+-- Debug("nisse - getRefPoint :: navPoints: " .. DumpPrettyDeep(navPoints))
+-- error("NOT IMPLEMENTED")
 end
 
 function getZone( source )
@@ -2609,7 +2673,7 @@ DCAF.Location = {
     Type = nil          -- #string - type of location
 }
 
-function DCAF.Location:NewNamed(name, source, throwOnFail)
+function DCAF.Location:NewNamed(name, source, coalition, throwOnFail)
     if source == nil then
         error("DCAF.Location:New :: `source` cannot be unassigned") end
 
@@ -2623,11 +2687,11 @@ function DCAF.Location:NewNamed(name, source, throwOnFail)
         return source
     elseif isCoordinate(source) then
         location.Coordinate = source
-        location.Name = source:ToStringLLDDM()
+        location.Name = name or source:ToStringLLDDM()
         return location
     elseif isZone(source) then
         location.Coordinate = source:GetCoordinate()
-        location.Name = source:GetName()
+        location.Name = name or source:GetName()
         return location
     elseif isVec2(source) then
         location.Coordinate = COORDINATE:NewFromVec2(source)
@@ -2639,13 +2703,13 @@ function DCAF.Location:NewNamed(name, source, throwOnFail)
         return location
     elseif isAirbase(source) then
         location.Coordinate = source:GetCoordinate()
-        location.Name = source.AirbaseName
+        location.Name = name or source.AirbaseName
         location.IsAir = false
         -- location.IsAirdrome = true
         return location
     elseif isGroup(source) then
         location.Coordinate = source:GetCoordinate()
-        location.Name = source.GroupName
+        location.Name = name or source.GroupName
         location.IsAir = source:IsAir()
         location.IsShip = source:IsShip()
         location.IsGround = source:IsGround()
@@ -2653,7 +2717,7 @@ function DCAF.Location:NewNamed(name, source, throwOnFail)
         return location
     elseif isUnit(source) or isUnit(source) then
         location.Coordinate = source:GetCoordinate()
-        location.Name = source.UnitName
+        location.Name = name or source.UnitName
         location.IsAir = source:IsAir()
         location.IsShip = source:IsShip()
         location.IsGround = source:IsGround()
@@ -2661,41 +2725,64 @@ function DCAF.Location:NewNamed(name, source, throwOnFail)
         return location
     elseif isStatic(source) then
         location.Coordinate = source:GetCoordinate()
-        location.Name = source.GroupName
+        location.Name = name or source.GroupName
         location.IsStatic = true
         return location
     else
         -- try resolve source...
-        local zone = getZone(source)
-        if zone then return DCAF.Location:New(zone) end
-        local unit = getUnit(source)
-        if unit then
-            return DCAF.Location:New(unit) end
-        local group = getGroup(source)
-        if group then
-            return DCAF.Location:New(group) end
+        if coalition then
+            local validCoalition = Coalition.Resolve(coalition)
+            if not validCoalition then return Error("DCAF.Location:NewNamed :: `coalition` could not be resolved: " .. DumpPretty(coalition)) end
+            local refPoint = getRefPoint(source, coalition)
+            if refPoint then return refPoint end
+        end
         local airbase = getAirbase(source)
         if airbase then return DCAF.Location:New(airbase) end
+
+        local zone = getZone(source)
+        if zone then return DCAF.Location:New(zone) end
+            
+        local unit = getUnit(source)
+        if unit then return DCAF.Location:New(unit) end
+
+        local group = getGroup(source)
+        if group then return DCAF.Location:New(group) end
+            
         local static = getStatic(source)
         if static then return DCAF.Location:New(static) end
+            
         if throwOnFail then
             error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
         else
-            Warning("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
+            Error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
             return location
         end
     end
 end
 
-function DCAF.Location:New(source, throwOnFail)
-    return DCAF.Location:NewNamed(nil, source, throwOnFail)
+function DCAF.Location.ResolveZone(source)
+    local zone = getZone(source)
+    if zone then return DCAF.Location:New(zone) end
+    local group = getGroup(source)
+    if group then
+        local route = group:CopyRoute()
+        if #route > 0 then
+            local name = "ZNP " .. group.GroupName
+            local zone = ZONE_POLYGON:New(name, group)
+            return DCAF.Location:NewNamed(name, zone)
+        end
+    end
 end
 
-function DCAF.Location.Resolve(source)
+function DCAF.Location:New(source, coalition, throwOnFail)
+    return DCAF.Location:NewNamed(nil, source, coalition, throwOnFail)
+end
+
+function DCAF.Location.Resolve(source, coalition)
     if isClass(source, DCAF.Location.ClassName) then
         return source end
 
-    local d = DCAF.Location:New(source, false)
+    local d = DCAF.Location:New(source, coalition, false)
     if d then
         return d
     end
@@ -4100,27 +4187,6 @@ function DumpPretty(value, options)
         end
         for k, v in pairs(value) do
             dumpKeyValue(k, v)
-            -- if (options.includeFunctions or type(v) ~= "function") then
-            --     if isAlreadyDumped(v) then
-            --         if asJson then
-            --             s = s .. indent..'"'..k..'"'..' : ' .. " {},\n"
-            --         else
-            --             if isNumber(k) then
-            --                 s = s .. indent..'['..k..']'..' = { --[[ recursive table ]] },\n'
-            --             else
-            --                 s = s .. indent..'["'..k..'"]'..' = { --[[ recursive table ]] },\n'
-            --             end
-            --         end
-            --     else -- if not options:IsSkipped(k) then
-            --         if (asJson) then
-            --             s = s .. indent..'"'..k..'"'..' : '
-            --         else
-            --             if type(k) ~= 'number' then k = '"'..k..'"' end
-            --             s = s .. indent.. '['..k..'] = '
-            --         end
-            --             s = s .. dumpRecursive(v, ilvl+1, idtSize) .. ',\n'
-            --     end
-            -- end
         end
         return s .. mkIndent((ilvl-1) * idtSize) .. '}'
     end
@@ -4195,7 +4261,7 @@ local function getRelativeDirection(heading, bearing)
 end
 
 
---- Returns a value that will be positive [1 - 180] if target is to the left of source location, or negative [-1 to -180] if target is to right of source location
+--- Returns an object with three values to describe the relative posiotion between two locations
 function GetRelativePosition(source, target)
     local sourceLocation = DCAF.Location.Resolve(source)
     local targetLocation = DCAF.Location.Resolve(target)
@@ -4580,15 +4646,9 @@ end
 function ChangeSpeed( controllable, changeMPS )
 
 Debug("ChangeSpeed :: changeMPS: " .. Dump(changeMPS))
-
-    local validUnit = getUnit()
-    if validUnit then
-        controllable = validUnit
-    else
-        local validGroup = getGroup(controllable)
-        if not validGroup then
-            return Error("ChangeSpeed-? :: `controllable` must specify a unit or group, but was: " .. DumpPretty(controllable))
-        end
+    local validGroup = getGroup(controllable)
+    if not validGroup then
+        return Error("ChangeSpeed-? :: `controllable` must specify a unit or group, but was: " .. DumpPretty(controllable))
     end
     if not isNumber(changeMPS) then
         return Error("ChangeSpeed-? :: `changeMPS` must be number, but was: " .. DumpPretty(changeMPS))
@@ -4597,11 +4657,13 @@ Debug("ChangeSpeed :: changeMPS: " .. Dump(changeMPS))
 Debug("ChangeSpeed :: controllable: " .. controllable.UnitName .. " :: speedMPS: " .. Dump(speedMPS))
     local speedMPS = speedMPS + changeMPS
 Debug("ChangeSpeed :: controllable: " .. controllable.UnitName .. " :: changeMPS: " .. Dump(speedMPS))
-    local controller = controllable:_GetController()
-    if controller then 
+    validGroup:SetSpeed(speedMPS, true)
 Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
-        controller:setSpeed(speedMPS)
-    end
+--     local controller = controllable:_GetController()
+--     if controller then 
+-- Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
+--         controller:setSpeed(speedMPS)
+--     end
     return controllable
 end
 
@@ -9419,7 +9481,7 @@ function DCAF.AvailableTanker:New(callsign, number, turnaroundTime, airbases)
         error("DCAF.AvailableTanker:New :: `callsign` must be number, but was: " .. DumpPretty(callsign)) end
     if not isNumber(number) then
         error("DCAF.AvailableTanker:New :: `number` must be number, but was: " .. DumpPretty(number)) end
-    
+
     local tanker = DCAF.clone(DCAF.AvailableTanker)
     tanker.Callsign = callsign
     tanker.Number = number
@@ -9457,6 +9519,10 @@ function DCAF.AvailableTanker:_getAirbaseInfo(airbase)
     for _, airServiceBase in ipairs(self.Airbases) do
         if airServiceBase.Airbase.AirbaseName == airbaseName then return airServiceBase end
     end
+end
+
+function DCAF.AvailableTanker:_enforceCallsign(spawn)
+    spawn:InitCallSign(self.Callsign, CALLSIGN.Tanker:ToString(self.Callsign), self.Number, 1)
 end
 
 --- Sets the amount of time needed for a tanker until it becomes available for new tasking after RTB
@@ -10043,9 +10109,10 @@ Debug("nisse - DCAF.TankerTrack:ActivateAir :: validLocation: " .. DumpPretty(va
     end
     local group = DCAF.Tanker:FindGroupWithCallsign(tankerInfo.Callsign, tankerInfo.Number)
     local spawn = getSpawn(group.GroupName)
+    tankerInfo:_enforceCallsign(spawn)
 Debug("nisse - DCAF.TankerTrack:ActivateAir :: group.GroupName: " .. group.GroupName .. " :: spawn: " .. DumpPretty(spawn))
     spawn:InitHeading(self.Heading, self.Heading)
-    local speed = UTILS.KnotsToKmph(350)
+    local speed = UTILS.KnotsToKmph(MachToKnots(.8))
     local wp0 = coordSpawn:WaypointAirFlyOverPoint(COORDINATE.WaypointAltType.BARO, speed)
     local wp1 = self.CoordIP:WaypointAirFlyOverPoint(COORDINATE.WaypointAltType.BARO, speed)
     local wp2
@@ -10118,7 +10185,7 @@ function DCAF.TankerTrack:ActivateAirbase(tankerInfo, route, behavior)
     local airbase
     local wpIP
     local waypoints
-    local speed = UTILS.KnotsToKmph(350)
+    local speed = UTILS.KnotsToKmph(MachToKnots(.8))
 
     local function trackIngressWaypoints()
         local revHdg = ReciprocalAngle(self.Heading)
@@ -10128,7 +10195,7 @@ function DCAF.TankerTrack:ActivateAirbase(tankerInfo, route, behavior)
         coordIngress:SetAltitude(Feet(20000))
         local wpIngress = coordIngress:WaypointAirFlyOverPoint(COORDINATE.WaypointAltType.BARO, speed)
         wpIngress.name = "TRACK INGRESS"
-        wpIngress.speed = Knots(370)
+        wpIngress.speed = speed
         return { wpIngress, wpIP }
     end
 
@@ -10162,6 +10229,7 @@ function DCAF.TankerTrack:ActivateAirbase(tankerInfo, route, behavior)
     else
         group = DCAF.Tanker:FindGroupWithCallsign(tankerInfo.Callsign, tankerInfo.Number)
         local spawn = getSpawn(group.GroupName)
+        tankerInfo:_enforceCallsign(spawn)
         spawn:InitGroupHeading(self.Heading)
         local airbaseInfo = tankerInfo:_getAirbaseInfo(airbase)
         local parkingSpots
@@ -10879,21 +10947,19 @@ local function buildControllerTankerMenus(caption, scope, parentMenu)
                 else
                     airdromes = tankerInfo.Airbases
                 end
-                local rtbMenu
-                if airdromes and #airdromes > 1 then
-                    if group then
-                        rtbMenu = MENU_GROUP:New(group, "RTB " .. tanker.DisplayName, menuTrack)
-                    else
-                        rtbMenu = MENU_COALITION:New(dcafCoalition, "RTB " .. tanker.DisplayName, menuTrack)
-                    end
-                end
 
                 local function rtbAirdromes(menuTextPrefix, allowPostpone)
+                    local menu
+                    if group then
+                        menu = MENU_GROUP:New(group, menuTextPrefix, menuTrack)
+                     else
+                        menu = MENU_COALITION:New(dcafCoalition, menuTextPrefix, menuTrack)
+                     end
                     for _, airServiceBase in ipairs(airdromes) do
                         local airbaseName = airServiceBase.Airbase.AirbaseName
                         local menuText = menuTextPrefix .. " >> " .. airbaseName
+                        local rtbMenu = DCAF.MENU:New(menu or menuTrack)
                         if airServiceBase.RTBRoutes and #airServiceBase.RTBRoutes > 0 then
-                            local rtbMenu = DCAF.MENU:New(rtbMenu or menuTrack)
                             for _, rtbRoute in ipairs(airServiceBase.RTBRoutes) do
                                  if group then
                                     rtbMenu:GroupCommand(group, menuText .. " (" .. rtbRoute.Name .. ")", sendTankerHome, airbaseName, rtbRoute, allowPostpone)
@@ -12437,7 +12503,7 @@ local function blastWave(point, radius, weapon, power)
                     local intensity = (power * scaled_power_factor) / (4 * 3.14 * surface_distance * surface_distance )
                     local surface_area = _length * height --Ideally we should roughly calculate the surface area facing the blast point, but we'll just find the largest side of the object for now
                     local damage_for_surface = intensity * surface_area
--- Debug(obj:getTypeName().." sa:"..surface_area.." distance:"..surface_distance.." dfs:"..damage_for_surface.." pw:"..power)
+Debug(obj:getTypeName().." sa:"..surface_area.." distance:"..surface_distance.." dfs:"..damage_for_surface.." pw:"..power)
                     if damage_for_surface > options.CascadeDamageThreshold then
                         local explosion_size = damage_for_surface
                         if obj:getDesc().category == Unit.Category.STRUCTURE then
@@ -12518,7 +12584,7 @@ function DCAF.BlastDamage.Start(options)
         DCAF.BlastDamage.Options = options
     end
     DCAF.BlastDamage.WpnTracker:Start(DCAF.BlastDamage.UpdateInterval)
-    Debug(DCAF.BlastDamage.ClassName .. " :: started :: options: " .. DumpPretty(DCAF.BlastDamage.Options))
+    Trace(DCAF.BlastDamage.ClassName .. " :: started :: options: " .. DumpPretty(DCAF.BlastDamage.Options))
 end
 
 ---- SRS ----

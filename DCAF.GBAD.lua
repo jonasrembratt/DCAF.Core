@@ -284,7 +284,7 @@ DCAF_GBADInfo:New("p-19 s-125 sr", "SA-2 Flat Face SR"):InitSR():InitRange(Nauti
 DCAF_GBADInfo:New("snr s-125 tr", "SA-3 Low Blow TR"):InitTR():InitRange(NauticalMiles(13), Feet(60000))
 -- SA-5 Gammon
 DCAF_GBADInfo:New("RPC_5N62V", "SA-5 Square Pair TR"):InitTR():InitRange(NauticalMiles(73), Feet(60000))
-DCAF_GBADInfo:New("RLS_19J6", "SA-5 Tin SHield SR"):InitSR():InitRange(NauticalMiles(73), Feet(60000))
+DCAF_GBADInfo:New("RLS_19J6", "SA-5 Tin Shield SR"):InitSR():InitRange(NauticalMiles(73), Feet(60000))  
 -- SA-6 Gainful
 DCAF_GBADInfo:New("Kub 1S91 str", "SA-6 Straight Flush STR"):InitSR():InitTR():InitRange(NauticalMiles(22), Feet(26000))
 DCAF_GBADInfo:New("Kub 2P25 ln", "SA-6 Gainful LN"):InitTR():InitLauncher():InitRange(NauticalMiles(22), Feet(26000))
@@ -374,7 +374,7 @@ local function teardownIADS(area, force)
     area.IADS = nil
     local message = area.IADS_Type .. " IADS was removed"
     area.IADS_Type = nil
-    MessageTo(nil, message)
+    -- MessageTo(nil, message)
     Trace(TracePrefix .. message)
 end
 
@@ -596,7 +596,7 @@ end
     end
     area.IADS:Start()
     local message = "MANTIS IADS is active"
-    MessageTo(nil, message)
+    -- MessageTo(nil, message)
     Trace(TracePrefix .. message)
 end
 
@@ -776,7 +776,7 @@ local function destroySAMSites(area, template)
         end
         if countRemoved > 0 then
             local message = "Removed " .. Dump(countRemoved) .. " '" .. template .. "' SAM sites from '" .. area.Name .. "'"
-            MessageTo(nil, message)
+            -- MessageTo(nil, message)
             Trace(TracePrefix .. message)
         end
     end
@@ -923,7 +923,7 @@ local function spawnSAMSite(area, template, vec2, destroyExisting, shorads)
     else
         message = "SAM site was spawned: " .. template .. " (IADS is OFF)"
     end
-    MessageTo(nil, message)
+    -- MessageTo(nil, message)
     Trace(TracePrefix .. message)
     return samGroup
 end
@@ -1142,14 +1142,14 @@ local function buildMANTISCoalitionMenu(area, forCoalition, parentMenu, rebuildM
     _area_buildMANTISCoalitionMenuParentMenu = parentMenu
     if area.IADS_Type == IADS_Types.MANTIS then
         MENU_COALITION_COMMAND:New(forCoalition, "Deactivate " .. IADS_Types.MANTIS, parentMenu, function()
-            MessageTo(nil, IADS_Types.MANTIS .. " is turned OFF in '" .. area.Name .. "'")
+            -- MessageTo(nil, IADS_Types.MANTIS .. " is turned OFF in '" .. area.Name .. "'")
             teardownIADS(area, true)
             rebuildMenusFunc(area, forCoalition, parentMenu, rebuildMenusFunc)
         end)
     else
         MENU_COALITION_COMMAND:New(forCoalition, "Activate " .. IADS_Types.MANTIS, parentMenu, function() 
             area.IADS_Type = IADS_Types.MANTIS
-            MessageTo(nil, IADS_Types.MANTIS .. " is activated in '" .. area.Name .. "'")
+            -- MessageTo(nil, IADS_Types.MANTIS .. " is activated in '" .. area.Name .. "'")
             buildMANTIS_IADS(area) 
             rebuildMenusFunc(area, forCoalition, parentMenu, rebuildMenusFunc)
         end)
@@ -1167,14 +1167,14 @@ local function buildMANTISGroupMenu(area, forGroup, parentMenu, rebuildMenusFunc
     end
     if area.IADS_Type == IADS_Types.MANTIS then
         MENU_GROUP_COMMAND:New(forGroup, "Deactivate " .. IADS_Types.MANTIS, parentMenu, function()
-            MessageTo(nil, IADS_Types.MANTIS .. " is turned OFF in '" .. area.Name .. "'")
+            -- MessageTo(nil, IADS_Types.MANTIS .. " is turned OFF in '" .. area.Name .. "'")
             teardownIADS(area)
             rebuildMenusFunc(area, forGroup, parentMenu)
         end)
     else
         MENU_GROUP_COMMAND:New(forGroup, "Activate " .. IADS_Types.MANTIS, parentMenu, function() 
             area.IADS_Type = IADS_Types.MANTIS
-            MessageTo(nil, IADS_Types.MANTIS .. " is activated in '" .. area.Name .. "'")
+            -- MessageTo(nil, IADS_Types.MANTIS .. " is activated in '" .. area.Name .. "'")
             buildMANTIS_IADS(area) 
             rebuildMenusFunc(area, forGroup, parentMenu)
         end)
@@ -1192,14 +1192,14 @@ local function buildSkynetCoalitionMenu(area, forCoalition, parentMenu, rebuildF
 
     if area.IADS_Type == IADS_Types.Skynet then
         MENU_COALITION_COMMAND:New(forCoalition, "Deactivate " .. IADS_Types.Skynet, parentMenu, function()
-            MessageTo(nil, "Skynet is turned OFF in '" .. area.Name .. "'")
+            -- MessageTo(nil, "Skynet is turned OFF in '" .. area.Name .. "'")
             teardownIADS(area)
             _area_buildSkynetCoalitionMenuFunc(area, forCoalition, parentMenu)
         end)
     else
         MENU_COALITION_COMMAND:New(forCoalition, "Activate " .. IADS_Types.Skynet, parentMenu, function() 
             area.IADS_Type = IADS_Types.Skynet
-            MessageTo(nil, IADS_Types.Skynet .. " is activated in '" .. area.Name)
+            -- MessageTo(nil, IADS_Types.Skynet .. " is activated in '" .. area.Name)
             buildSkynet_IADS(area) 
             _area_buildSkynetCoalitionMenuFunc(area, forCoalition, parentMenu)
         end)
