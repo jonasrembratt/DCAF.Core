@@ -1806,12 +1806,12 @@ local function hackMantisIADS(regiment, iads)
                     else
                         _distance = 0
                     end
-                
+
                     self:T( string.format("*** SEAD - target skill %s, distance %dkm, reach %dkm, tti %dsec", _targetskill, _distance,reach,_tti ))
-                
+
                     if reach >= _distance then
                         self:T("*** SEAD - Shot in Reach")
-                
+
                         local function SuppressionStart(args)
                             self:T(string.format("*** SEAD - %s Radar Off & Relocating",args[2]))
                             local grp = args[1] -- Wrapper.Group#GROUP
@@ -1821,7 +1821,7 @@ local function hackMantisIADS(regiment, iads)
                                 grp:EnableEmission(false)
                             end
                             grp:OptionAlarmStateGreen() -- needed else we cannot move around
-Debug("nisse - GBAD.Regiment/onafterManageEvasion/SuppressionStart :: .UseEvasiveRelocation: " .. DumpPretty(self.UseEvasiveRelocation))                  
+Debug("nisse - GBAD.Regiment/onafterManageEvasion/SuppressionStart :: .UseEvasiveRelocation: " .. DumpPretty(self.UseEvasiveRelocation))
                             if regiment.UseEvasiveRelocation then  -- //hacked//
                                 grp:RelocateGroundRandomInRadius(20,300,false,false,"Diamond",true)
                             end
@@ -1966,7 +1966,7 @@ function DCAF.GBAD.Regiment:Start()
         return self
     end
     Debug(DCAF.GBAD.Regiment.ClassName .. ":Start :: " .. self.Name .. "...")
-    local iads = MANTIS:New(self.Name, "n/a", "n/a", self.HQ.GroupName, self.Coalition, true, self.AWACS)
+    local iads = MANTIS:New(self.Name, "n/a", self.EWRPrefix, self.HQ.GroupName, self.Coalition, true, self.AWACS)
     hackMantisIADS(self, iads)
     local set_zone = SET_ZONE:New()
     for _, zone in ipairs(self.Zones) do
