@@ -52,6 +52,11 @@ DCAF.Flares = {
     Remaining = 1
 }
 
+DCAF.AltitudeType = {
+    AGL = "AGL",            -- Above Ground Level
+    MSL = "MSL"             -- Mean Sea Level
+}
+
 local _debugId = 0
 local function get_next_debugId()
     _debugId = _debugId + 1
@@ -237,7 +242,7 @@ function getTableType(table)
     if not isTable(table) then
         return end
 
-    for k, v in pairs(table) do
+    for k, _ in pairs(table) do
         if isString(k) then
             return "dictionary"
         elseif isNumber(k) then
@@ -288,15 +293,201 @@ function isDictionary( value )
     return tableType == "dictionary"
 end
 
+--[[
+Resolves a UNIT from an arbitrary source
+]]--
+function getUnit( source )
+    if (isUnit(source)) then return source end
+    if (isString(source)) then
+        return UNIT:FindByName( source )
+    end
+end
+
+--[[
+getGroup
+    Resolves a GROUP from an arbitrary source
+]]--
+
+--- Gets a group from a source
+-- @param #Any source - A #GROUP or name of a group
+-- @param #Any data - (optional) Arbitrary value to be attached to the requested group
+-- @param #Any dataKey - (optional) Key to be used for attaching `data` (only used when `data` is assigned)
+function getGroup( source, data, dataKey )
+
+    local function attachData(group)
+        group[dataKey or DCAF.DataKey] = data
+        return group
+    end
+
+    if (isGroup(source)) then
+        return attachData(source)
+    end
+    if (isUnit(source)) then
+        return attachData(source:GetGroup())
+    end
+    if (not isAssignedString(source)) then return end
+
+    local group = GROUP:FindByName( source )
+    if (group ~= nil) then
+        return attachData(group)
+    end
+    local unit = UNIT:FindByName( source )
+    if (unit ~= nil) then
+        return attachData(unit:GetGroup())
+    end
+end
+
+function getControllable( source )
+    local unit = getUnit(source)
+    if (unit ~= nil) then
+      return unit end
+
+    local group = getGroup(source)
+    if (group ~= nil) then
+      return group end
+
+    return nil
+end
+
+function getStatic( source )
+    if isStatic(source) then
+        return source end
+    if not isAssignedString(source) then
+        return end
+
+    local static
+    pcall(function()
+        static = STATIC:FindByName(source)
+    end)
+    return static
+end
+
+function getAirbase( source )
+    if isClass(source, AIRBASE) then return source end
+    if isAssignedString(source) then
+        return AIRBASE:FindByName(source)
+    end
+    if isNumber(source) then return AIRBASE:FindByID(source) end
+end
+
+local RefPointsIndex = {}
+
+local function getRefPointsIndex(coalition)
+    local index = RefPointsIndex[coalition]
+    if index then return index end
+    index = {}
+    local navPoints = env.mission.coalition[coalition].nav_points
+    for _, navPoint in ipairs(navPoints) do
+        local loc = DCAF.Location:NewNamed(navPoint.callsignStr, COORDINATE:NewFromVec2(navPoint))
+        loc.Type = navPoint.type
+        loc.ID = navPoint.id
+        loc.Properties = navPoint.properties
+        if isAssignedString(navPoint.comment) then loc.Comment = navPoint.comment end
+        index[loc.Name] = loc
+    end
+    RefPointsIndex[coalition] = index
+    return index
+end
+
+function getRefPoint(source, coalition)
+    local validCoalition = Coalition.Resolve(coalition)
+    if not validCoalition then return Error("getRefPoint :: cannot resolve `coalition`: " .. DumpPretty(coalition)) end
+    local index = getRefPointsIndex(validCoalition)
+    return index[source]
+--     local navPoints = env.mission.coalition[validCoalition].nav_points
+-- Debug("nisse - getRefPoint :: navPoints: " .. DumpPrettyDeep(navPoints))
+-- error("NOT IMPLEMENTED")
+end
+
+function getZone( source )
+    if isZone(source) then
+        return source end
+
+    if not isAssignedString(source) then
+        return end
+
+    local zone = ZONE:FindByName(source)
+    if zone then
+        return zone end
+
+    local group = getGroup(source)
+    return zone
+end
+
 -- ///////////////////////////////////////////////////////////////////
--- Unit types
+-- Colors
+
+Color = {
+    Black = {0,0,0},
+    Blue = {0,0,1},
+    Green = {0,1,0},
+    Pink = {1,.5,.5},
+    Natofriendly = {.5,.5,1},
+    NatoHostile = {1,.5,.5},
+    Red = {1,0,0},
+    White = {1,1,1},
+}
+
+
+-- ///////////////////////////////////////////////////////////////////
+-- Unit information
+
+DCAF_UnitClass = {
+    -- Unknown
+    Unknown = "(unknown)",
+    -- Airborn
+    FixedWing = "Fixed Wing Aircraft",
+    RotaryWing = "Rotary Wing Aircraft",
+    UAV = "UAV",
+    --- Ground
+    AirDefence = "Air Defence",
+    AntiTank = "Anti Tank",
+    Armor = "Armor",
+    Artillery = "Artillery",
+    CombinedManoeuvre = "Combined Manoeuvre", -- IFV / APC etc.
+    Engineer = "Engineer",
+    HQ = "HQ",
+    Infantry = "Infantry",
+    Missile = "Missile",
+    Radar = "Radar",
+    Recon = "Recon",
+    SpecFor = "Special Forces",
+    Transport = "Transport",
+    -- Navy
+    Navy = "Navy",
+}
+
+local function buildUnitClassWeight(list)
+    local weight = {}
+    for index, value in ipairs(list) do
+        weight[value] = index
+    end
+    return weight
+end
+
+local DCAF_DefaultGroundUnitClassWeight = buildUnitClassWeight({
+    DCAF_UnitClass.HQ,
+    DCAF_UnitClass.Armor,
+    DCAF_UnitClass.AirDefence,
+    DCAF_UnitClass.Artillery,
+    DCAF_UnitClass.CombinedManoeuvre,
+    DCAF_UnitClass.Missile,
+    DCAF_UnitClass.AntiTank,
+    DCAF_UnitClass.Engineer,
+    DCAF_UnitClass.Radar,
+    DCAF_UnitClass.Recon,
+    DCAF_UnitClass.SpecFor,
+    DCAF_UnitClass.Transport,
+    DCAF_UnitClass.Infantry,
+})
 
 local DCAF_UnitTypeInfo = {
     ClassName = "DCAF_UnitTypeInfo",
     ----
     TypeName = nil,         -- #string (eg. "AV8BNA")
     Nicknames = nil,        -- dictionary of #string(s) (eg. "Harrier")
-    Category = nil -- Unit.Category.SHIP/.GROUND_UNIT/.AIRPLANE/.HELICOPTER/.STRUCTURE
+    Category = nil,         -- Unit.Category.SHIP/.GROUND_UNIT/.AIRPLANE/.HELICOPTER/.STRUCTURE
+    UnitClass = nil         -- #DCAF_UnitClass (enum)
 }
 
 local DCAF_UnitTypeDB = {
@@ -308,10 +499,11 @@ local DCAF_UnitTypeNicknameDB = {
     -- value = list of #DCAF_UnitTypeInfo
 }
 
-function DCAF_UnitTypeInfo:New(typeName, category, nickname)
+function DCAF_UnitTypeInfo:New(typeName, category, nickname, unitClass)
     local info = DCAF.clone(DCAF_UnitTypeInfo)
     info.TypeName = typeName
     info.Category = category
+    info.UnitClass = unitClass
     DCAF_UnitTypeDB[typeName] = info
     if isAssignedString(nickname) then
         nickname = { nickname }
@@ -331,14 +523,96 @@ function DCAF_UnitTypeInfo:New(typeName, category, nickname)
     return info
 end
 
+-- Fixed Wing (WIP)
 ENUMS.UnitType = {}
-ENUMS.UnitType.AVN8B = DCAF_UnitTypeInfo:New("AV8BNA", Unit.Category.AIRPLANE, "Harrier")
-ENUMS.UnitType.F15ESE = DCAF_UnitTypeInfo:New("F-15ESE", Unit.Category.AIRPLANE, {"Eagle", "Mud Hen"})
-ENUMS.UnitType.F16CM = DCAF_UnitTypeInfo:New("F-16C_50", Unit.Category.AIRPLANE, "Viper")
-ENUMS.UnitType.F14A135GR = DCAF_UnitTypeInfo:New("F-14A-135-GR", Unit.Category.AIRPLANE, "Tomcat")
-ENUMS.UnitType.F14B = DCAF_UnitTypeInfo:New("F-14B", Unit.Category.AIRPLANE, "Tomcat")
-ENUMS.UnitType.FA18C_hornet = DCAF_UnitTypeInfo:New("FA-18C_hornet", Unit.Category.AIRPLANE, {"Hornet", "Bug"})
-ENUMS.UnitType.C_130 = DCAF_UnitTypeInfo:New("C-130", Unit.Category.AIRPLANE, {"C-130", "Hercules"})
+ENUMS.UnitType.AVN8B = DCAF_UnitTypeInfo:New("AV8BNA", Unit.Category.AIRPLANE, "Harrier", DCAF_UnitClass.FixedWing)
+ENUMS.UnitType.F15ESE = DCAF_UnitTypeInfo:New("F-15ESE", Unit.Category.AIRPLANE, {"Eagle", "Mud Hen"}, DCAF_UnitClass.FixedWing)
+ENUMS.UnitType.F16CM = DCAF_UnitTypeInfo:New("F-16C_50", Unit.Category.AIRPLANE, "Viper", DCAF_UnitClass.FixedWing)
+ENUMS.UnitType.F14A135GR = DCAF_UnitTypeInfo:New("F-14A-135-GR", Unit.Category.AIRPLANE, "Tomcat", DCAF_UnitClass.FixedWing)
+ENUMS.UnitType.F14B = DCAF_UnitTypeInfo:New("F-14B", Unit.Category.AIRPLANE, "Tomcat", DCAF_UnitClass.FixedWing)
+ENUMS.UnitType.FA18C_hornet = DCAF_UnitTypeInfo:New("FA-18C_hornet", Unit.Category.AIRPLANE, {"Hornet", "Bug"}, DCAF_UnitClass.FixedWing)
+ENUMS.UnitType.C_130 = DCAF_UnitTypeInfo:New("C-130", Unit.Category.AIRPLANE, {"C-130", "Hercules"}, DCAF_UnitClass.FixedWing)
+-- Ground Units // Armor
+ENUMS.UnitType.T55 = DCAF_UnitTypeInfo:New("T-55", Unit.Category.GROUND, {"T-55", "MBT T-55"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.T72B = DCAF_UnitTypeInfo:New("T-72B", Unit.Category.GROUND, {"T-72B", "MBT T-72"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.T72B3 = DCAF_UnitTypeInfo:New("T-72B3", Unit.Category.GROUND, {"T-72B3", "MBT T-72"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.T80UD = DCAF_UnitTypeInfo:New("T-80UD", Unit.Category.GROUND, {"T-80UD", "MBT T-80"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.T90 = DCAF_UnitTypeInfo:New("T-90", Unit.Category.GROUND, {"T-90", "MBT T-90"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.TYPE59 = DCAF_UnitTypeInfo:New("TYPE-59", Unit.Category.GROUND, {"Type 59", "MBT Type 59"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.Merkava_Mk4 = DCAF_UnitTypeInfo:New("Merkava_Mk4", Unit.Category.GROUND, {"Merkava Mk4", "MBT Merkava"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.M_1_Abrams = DCAF_UnitTypeInfo:New("M-1 Abrams", Unit.Category.GROUND, {"M1A2 Abrams", "MBT M1A2 Abrams"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.M60_Patton = DCAF_UnitTypeInfo:New("M-60", Unit.Category.GROUND, {"M-60 Patton", "MBT Patton"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.Challenger2 = DCAF_UnitTypeInfo:New("Challenger2", Unit.Category.GROUND, {"Challenger II", "MBT Challenger"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.Chieftain_mk3 = DCAF_UnitTypeInfo:New("Chieftain_mk3", Unit.Category.GROUND, {"Chieftain Mk.3", "MBT Chieftain"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.Leclerc = DCAF_UnitTypeInfo:New("Leclerc", Unit.Category.GROUND, {"Leclerc", "MBT Leclerc"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.Leopard_1A3 = DCAF_UnitTypeInfo:New("Leopard1A3", Unit.Category.GROUND, {"Leopard 1A3", "MBT Leopard"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.Leopard_2A4 = DCAF_UnitTypeInfo:New("leopard-2A4", Unit.Category.GROUND, {"Leopard 2A4", "MBT Leopard"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.Leopard_2A4_trs = DCAF_UnitTypeInfo:New("leopard-2A4_trs", Unit.Category.GROUND, {"Leopard 2A4 Trs", "MBT Leopard"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.Leopard_2A5 = DCAF_UnitTypeInfo:New("Leopard-2A5", Unit.Category.GROUND, {"Leopard 2A5", "MBT Leopard"}, DCAF_UnitClass.Armor)
+ENUMS.UnitType.Leopard_2 = DCAF_UnitTypeInfo:New("Leopard-2", Unit.Category.GROUND, {"Leopard-2", "MBT Leopard"}, DCAF_UnitClass.Armor)
+-- Ground Units // APC, Combined Manoeuvre
+ENUMS.UnitType.AAV7 = DCAF_UnitTypeInfo:New("AAV7", Unit.Category.GROUND, {"AAV7 Amphibious"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.BTR_80 = DCAF_UnitTypeInfo:New("BTR-80", Unit.Category.GROUND, {"BTR-80"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.M_113 = DCAF_UnitTypeInfo:New("M-113", Unit.Category.GROUND, {"M-113"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.MTLB = DCAF_UnitTypeInfo:New("MTLB", Unit.Category.GROUND, {"MTLB"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.TPZ = DCAF_UnitTypeInfo:New("TPZ", Unit.Category.GROUND, {"TPz Fuchs"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.LARC_V = DCAF_UnitTypeInfo:New("LARC-V", Unit.Category.GROUND, {"LARC-V"}, DCAF_UnitClass.ArCombinedManoeuvremor)
+ENUMS.UnitType.ZBD04A = DCAF_UnitTypeInfo:New("ZBD04A", Unit.Category.GROUND, {"ZBD-04A"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.Caiman_mk2 = DCAF_UnitTypeInfo:New("mrap_m2", Unit.Category.GROUND, {"MRAP Caiman MK2"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.Caiman_mk19 = DCAF_UnitTypeInfo:New("mrap_mk19", Unit.Category.GROUND, {"MRAP Caiman MK19"}, DCAF_UnitClass.CombinedManoeuvre)
+
+-- Ground Units // IFV, Combined Manoeuvre
+ENUMS.UnitType.BMD_1 = DCAF_UnitTypeInfo:New("BMD-1", Unit.Category.GROUND, {"BMD-1"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.BMP_1 = DCAF_UnitTypeInfo:New("BMP-1", Unit.Category.GROUND, {"BMP-1"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.BMP_2 = DCAF_UnitTypeInfo:New("BMP-2", Unit.Category.GROUND, {"BMP-2"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.BMP_3 = DCAF_UnitTypeInfo:New("BMP-3", Unit.Category.GROUND, {"BMP-3"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.BTR_82A = DCAF_UnitTypeInfo:New("BTR-82A", Unit.Category.GROUND, {"BTR-82A"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.BTR_82A = DCAF_UnitTypeInfo:New("BTR-82A", Unit.Category.GROUND, {"BTR-82A"}, DCAF_UnitClass.CombinedManoeuvre) -- TODO duplicate
+ENUMS.UnitType.M1126_Stryker_ICV = DCAF_UnitTypeInfo:New("M1126 Stryker ICV", Unit.Category.GROUND, {"M1126 Stryker ICV"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.M_2_Bradley = DCAF_UnitTypeInfo:New("M-2 Bradley", Unit.Category.GROUND, {"M2A2 Bradley"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.Marder = DCAF_UnitTypeInfo:New("Marder", Unit.Category.GROUND, {"Marder"}, DCAF_UnitClass.CombinedManoeuvre)
+ENUMS.UnitType.MCV_80 = DCAF_UnitTypeInfo:New("MCV-80", Unit.Category.GROUND, {"Warrior"}, DCAF_UnitClass.CombinedManoeuvre)
+-- Ground Units // Artillery, Howizer
+ENUMS.UnitType.LeFH_18_40_105 = DCAF_UnitTypeInfo:New("LeFH_18-40-105", Unit.Category.GROUND, {"LeFH-18 105mm", "Howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.M2A1_105 = DCAF_UnitTypeInfo:New("M2A1-105", Unit.Category.GROUND, {"M2A1 105mm", "Howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.Pak40 = DCAF_UnitTypeInfo:New("Pak40", Unit.Category.GROUND, {"Pak 40 75mm", "Howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType._2A18M = DCAF_UnitTypeInfo:New("2A18M", Unit.Category.GROUND, {"2A18M D-30", "Howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.L118_Unit = DCAF_UnitTypeInfo:New("L118_Unit", Unit.Category.GROUND, {"L118 Light Gun", "Howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.L118_Unit = DCAF_UnitTypeInfo:New("L118_Unit", Unit.Category.GROUND, {"L118 Light Gun", "Howizer"}, DCAF_UnitClass.Artillery) -- TODO duplicate
+-- Ground Units // Artillery, MLRS
+ENUMS.UnitType.Smerch = DCAF_UnitTypeInfo:New("Smerch", Unit.Category.GROUND, {"9A52 Smerch CM 300mm", "Smerch"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.Smerch_HE = DCAF_UnitTypeInfo:New("Smerch_HE", Unit.Category.GROUND, {"9A52 Smerch HE 300mm", "Smerch"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.Uragan_BM_27 = DCAF_UnitTypeInfo:New("Uragan_BM-27", Unit.Category.GROUND, {"9K57 Uragan BM-27 220mm", "Uragan"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.Grad_URAL = DCAF_UnitTypeInfo:New("Grad-URAL", Unit.Category.GROUND, {"BM-21 Grad 122mm", "Grad"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.MLRS = DCAF_UnitTypeInfo:New("MLRS", Unit.Category.GROUND, {"MLRS M270 227mm", "MLRS"}, DCAF_UnitClass.Artillery)
+-- Ground Units // Artillery, Rocket pods on pickup vehicle
+ENUMS.UnitType.HL_B8M1 = DCAF_UnitTypeInfo:New("HL_B8M1", Unit.Category.GROUND, {"HL with B8M1 80mm", "Rocket pod on Pickup"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.tt_B8M1 = DCAF_UnitTypeInfo:New("tt_B8M1", Unit.Category.GROUND, {"LC with B8M1 80mm", "Rocket pod on Pickup"}, DCAF_UnitClass.Artillery)
+-- Ground Units // Artillery, Mortar
+ENUMS.UnitType._2B11_mortar = DCAF_UnitTypeInfo:New("2B11 mortar", Unit.Category.GROUND, {"2B11 120mm", "Mortar"}, DCAF_UnitClass.Artillery)
+-- Ground Units // Self propelled howizer
+ENUMS.UnitType.PLZ05 = DCAF_UnitTypeInfo:New("PLZ05", Unit.Category.GROUND, {"PLZ-05", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.SAU_Gvozdika = DCAF_UnitTypeInfo:New("SAU Gvozdika", Unit.Category.GROUND, {"2S1 Gvozdika 122mm", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.SAU_Msta = DCAF_UnitTypeInfo:New("SAU Msta", Unit.Category.GROUND, {"2S19 Msta 152mm", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.SAU_Akatsia = DCAF_UnitTypeInfo:New("SAU Akatsia", Unit.Category.GROUND, {"2S3 Akatsia 152mm", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.SpGH_Dana = DCAF_UnitTypeInfo:New("SpGH_Dana", Unit.Category.GROUND, {"Dana vz77 152mm", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.M_109 = DCAF_UnitTypeInfo:New("M-109", Unit.Category.GROUND, {"M-109 Paladin 155mm", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.T155_Firtina = DCAF_UnitTypeInfo:New("T155_Firtina", Unit.Category.GROUND, {"T155 Firtina 155mm", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType.SAU_2_C9 = DCAF_UnitTypeInfo:New("SAU 2-C9", Unit.Category.GROUND, {"2S9 Nona 120mm M", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
+-- Ground Units // Missiles
+ENUMS.UnitType.Silkworm_SR = DCAF_UnitTypeInfo:New("Silkworm_SR", Unit.Category.GROUND, {"AShM Silkworm SR", "Silkworm radar"}, DCAF_UnitClass.Missile)
+ENUMS.UnitType.hy_launcher = DCAF_UnitTypeInfo:New("hy_launcher", Unit.Category.GROUND, {"AShM SS-N-2 Silkworm", "Silkworm anti-ship missile"}, DCAF_UnitClass.Missile)
+ENUMS.UnitType.Scud_B = DCAF_UnitTypeInfo:New("Scud_B", Unit.Category.GROUND, {"SS-1C Scud-B", "SCUD Missile"}, DCAF_UnitClass.Missile)
+-- Ground Units // Transport
+ENUMS.UnitType.GAZ_3308 = DCAF_UnitTypeInfo:New("GAZ-3308", Unit.Category.GROUND, {"GAZ-3308", "GAZ Truck"}, DCAF_UnitClass.Transport)
+ENUMS.UnitType.GAZ_66 = DCAF_UnitTypeInfo:New("GAZ-66", Unit.Category.GROUND, {"GAZ-66", "GAZ Truck"}, DCAF_UnitClass.Transport)
+ENUMS.UnitType.KAMAZ = DCAF_UnitTypeInfo:New("KAMAZ Truck", Unit.Category.GROUND, {"KAMAZ Truck", "KAMAZ Truck"}, DCAF_UnitClass.Transport)
+ENUMS.UnitType.KrAZ6322 = DCAF_UnitTypeInfo:New("KrAZ6322", Unit.Category.GROUND, {"KrAZ6322", "KrAZ Truck"}, DCAF_UnitClass.Transport)
+ENUMS.UnitType.M_818 = DCAF_UnitTypeInfo:New("M 818", Unit.Category.GROUND, {"M-939 Heavy", "M-939 Heavy Truck"}, DCAF_UnitClass.Transport)
+ENUMS.UnitType.Ural_375 = DCAF_UnitTypeInfo:New("Ural-375", Unit.Category.GROUND, {"Ural-375", "Ural-375 Truck"}, DCAF_UnitClass.Transport)
+ENUMS.UnitType.Ural_4320_31 = DCAF_UnitTypeInfo:New("Ural-4320-31", Unit.Category.GROUND, {"Ural-4320-31 Arm'd", "Ural Armored Truck"}, DCAF_UnitClass.Transport)
+ENUMS.UnitType.Ural_4320T = DCAF_UnitTypeInfo:New("Ural-4320T", Unit.Category.GROUND, {"Ural-4320T", "Ural Truck"}, DCAF_UnitClass.Transport)
+ENUMS.UnitType.ZIL_135 = DCAF_UnitTypeInfo:New("ZIL-135", Unit.Category.GROUND, {"ZIL-135", "ZIL Truck"}, DCAF_UnitClass.Transport)
 
 function IsUnitType(source, unitType)
     if isGroup(source) then
@@ -397,6 +671,57 @@ function IsAirborneUnitType(unitType)
         if category ~= Unit.Category.AIRPLANE and category ~= Unit.Category.HELICOPTER then return false end
     end
     return true
+end
+
+--- Examines a UNIT and resolves its "unit class" (#DCAF_UnitClass)
+-- @param #Any source - can be #UNIT or name of unit
+function GetUnitClass(source)
+    local validUnit = getUnit(source)
+    if not validUnit then return Error("ResolveUnitClass :: could not resolve UNIT from `source`: " .. DumpPretty(source)) end
+    local typeName = validUnit:GetTypeName()
+    -- Debug("GetUnitClass :: unit: " .. validUnit.UnitName .. " :: unit type name: " .. typeName)
+    local info = GetUnitTypeInfo(validUnit:GetTypeName())
+    if info then
+        -- Debug("GetUnitClass :: unit: " .. validUnit.UnitName .. " :: unit type name: " .. typeName .. " :: info: " .. DumpPretty(info))
+        info = info[1]
+        if info then return info.UnitClass end
+    end
+    if DCAF_GBADDatabase then
+        local gbadInfo = DCAF_GBADDatabase:GetInfo(source)
+        if gbadInfo then
+            return DCAF_UnitClass.AirDefence
+        end
+    end
+    Debug("GetUnitClass :: unit: " .. validUnit.UnitName .. " :: unit type name: " .. typeName .. " :: no unit information found for type: " .. typeName)
+    return DCAF_UnitClass.Unknown
+end
+
+--- Examines a ground GROUP and resolves its "unit class" (#DCAF_UnitClass)
+function ResolveGroundGroupClass(source, classWeight)
+    local validGroup = getGroup(source)
+    if not validGroup then return Error("ResolveGroupClass :: could not resolve GROUP from `source`: " .. DumpPretty(source)) end
+    if not validGroup:IsGround() then Error("ResolveGroupClass :: group is not a ground type: " .. DumpPretty(validGroup.GroupName)) end
+    local units = validGroup:GetUnits()
+
+    if isTable(classWeight) then
+        classWeight = buildUnitClassWeight(classWeight)
+    else
+        classWeight = DCAF_DefaultGroundUnitClassWeight
+    end
+
+    local lowestWeight = 999
+    local lowestUnitClass
+    for _, unit in ipairs(units) do
+        local unitClass = GetUnitClass(unit)
+        local weight = classWeight[unitClass]
+        if not weight then weight = 999 end
+            if weight < lowestWeight then
+            if weight == 1 then return unitClass end
+            lowestWeight = weight
+            lowestUnitClass = unitClass
+        end
+    end
+    return lowestUnitClass
 end
 
 function tableToList(table)
@@ -600,6 +925,29 @@ function CardinalDirection.FromHeading(heading)
     else
         return CardinalDirection.NorthWest
     end
+end
+
+--- Converts a cardinal, or semi-cardinal, direction into a heading
+function CardinalDirection.ToHeading(direction)
+    local x = 90 / 3
+
+    if direction == CardinalDirection.North then
+        return 360
+    elseif direction == CardinalDirection.NorthEast then
+        return 45
+    elseif direction == CardinalDirection.East then
+        return 90
+    elseif direction == CardinalDirection.SouthEast then
+        return 135
+    elseif direction == CardinalDirection.South then
+        return 180
+    elseif direction == CardinalDirection.SouthWest then
+        return 225
+    elseif direction == CardinalDirection.West then
+        return 270
+    elseif direction == CardinalDirection.NorthWest then
+        return 315
+    end        
 end
 
 function Skill.Validate(value)
@@ -1374,6 +1722,9 @@ end
     if #list == 0 then
         return end
 
+    if #list == 1 then
+        return list[1], 1
+    end    
     local index = math.random(#list)
     local item = list[index]
 if nisse then
@@ -1482,18 +1833,18 @@ end
 function COORDINATE:ToKeypad()
     local items = self:ToMGRS(3)
     if not items then return end
--- Debug("nisse - COORDINATE:ToKeypad() :: items: " .. DumpPretty(items))
-    local grid = items[2] .. " " .. string.sub(items[3], 1, 1) .. string.sub(items[4], 1, 1)
-    local x = tonumber(string.sub(items[3], 2, 3))
+--Debug("nisse - COORDINATE:ToKeypad() :: items: " .. DumpPretty(items))
+    local grid = items.Grid .. " " .. string.sub(items.X, 1, 1) .. string.sub(items.Y, 1, 1)
+    local x = tonumber(string.sub(items.X, 2, 3))
     local xo, yo
     if x < 33 then xo = 1 elseif x < 66 then xo = 2 else xo = 3 end
-    local y = 100 - tonumber(string.sub(items[4], 2, 3))
+    local y = 100 - tonumber(string.sub(items.Y, 2, 3))
     if y < 33 then yo = 0 elseif y < 66 then yo = 3 else yo = 6 end
 -- Debug("nisse - COORDINATE:ToKeypad() :: x: " .. x .. " :: xo: " .. xo .. " y: " .. y .. " :: yo: " .. yo )
     local keypad = xo + yo
 -- Debug("nisse - COORDINATE:ToKeypad() :: grid: " .. grid .. " :: keypad: " .. Dump(keypad) )
     return {
-        Map = items[1],
+        Map = items.Map,
         Grid = grid,
         Keypad = keypad
     }
@@ -2257,7 +2608,6 @@ function Coalition.Resolve(value, returnDCS)
         elseif test == Coalition.Red then resolvedCoalition = Coalition.Red
         elseif test == Coalition.Neutral then resolvedCoalition = Coalition.Neutral end
     elseif isList(value) then
-        local isValid, coalition
         for _, v in ipairs(value) do
             resolvedCoalition = Coalition.Resolve(v)
             if resolvedCoalition then
@@ -2468,125 +2818,6 @@ function getSpawnWithAlias(name, alias)
     end
 end
 
---[[
-Resolves a UNIT from an arbitrary source
-]]--
-function getUnit( source )
-    if (isUnit(source)) then return source end
-    if (isString(source)) then
-        return UNIT:FindByName( source )
-    end
-end
-
---[[
-getGroup
-    Resolves a GROUP from an arbitrary source
-]]--
-
---- Gets a group from a source
--- @param #Any source - A #GROUP or name of a group
--- @param #Any data - (optional) Arbitrary value to be attached to the requested group
--- @param #Any dataKey - (optional) Key to be used for attaching `data` (only used when `data` is assigned)
-function getGroup( source, data, dataKey )
-
-    local function attachData(group)
-        group[dataKey or DCAF.DataKey] = data
-        return group
-    end
-
-    if (isGroup(source)) then
-        return attachData(source)
-    end
-    if (isUnit(source)) then
-        return attachData(source:GetGroup())
-    end
-    if (not isAssignedString(source)) then return end
-
-    local group = GROUP:FindByName( source )
-    if (group ~= nil) then
-        return attachData(group)
-    end
-    local unit = UNIT:FindByName( source )
-    if (unit ~= nil) then
-        return attachData(unit:GetGroup())
-    end
-end
-
-function getControllable( source )
-    local unit = getUnit(source)
-    if (unit ~= nil) then
-      return unit end
-
-    local group = getGroup(source)
-    if (group ~= nil) then
-      return group end
-
-    return nil
-end
-
-function getStatic( source )
-    if isStatic(source) then
-        return source end
-    if not isAssignedString(source) then
-        return end
-
-    local static
-    pcall(function()
-        static = STATIC:FindByName(source)
-    end)
-    return static
-end
-
-function getAirbase( source )
-    if isClass(source, AIRBASE) then return source end
-    if isAssignedString(source) then return AIRBASE:FindByName(source) end
-    if isNumber(source) then return AIRBASE:FindByID(source) end
-end
-
-local RefPointsIndex = {}
-
-local function getRefPointsIndex(coalition)
-    local index = RefPointsIndex[coalition]
-    if index then return index end
-    index = {}
-    local navPoints = env.mission.coalition[coalition].nav_points
-    for _, navPoint in ipairs(navPoints) do
-        local loc = DCAF.Location:NewNamed(navPoint.callsignStr, COORDINATE:NewFromVec2(navPoint))
-        loc.Type = navPoint.type
-        loc.ID = navPoint.id
-        loc.Properties = navPoint.properties
-        if isAssignedString(navPoint.comment) then loc.Comment = navPoint.comment end
-        index[loc.Name] = loc
-    end
-    RefPointsIndex[coalition] = index
-    return index
-end
-
-function getRefPoint(source, coalition)
-    local validCoalition = Coalition.Resolve(coalition)
-    if not validCoalition then return Error("getRefPoint :: cannot resolve `coalition`: " .. DumpPretty(coalition)) end
-    local index = getRefPointsIndex(validCoalition)
-    return index[source]
---     local navPoints = env.mission.coalition[validCoalition].nav_points
--- Debug("nisse - getRefPoint :: navPoints: " .. DumpPrettyDeep(navPoints))
--- error("NOT IMPLEMENTED")
-end
-
-function getZone( source )
-    if isZone(source) then
-        return source end
-
-    if not isAssignedString(source) then
-        return end
-
-    local zone = ZONE:FindByName(source)
-    if zone then
-        return zone end
-
-    local group = getGroup(source)
-    return zone
-end
-
 function activateNow( source )
     local group = getGroup( source )
     if not group then
@@ -2741,16 +2972,16 @@ function DCAF.Location:NewNamed(name, source, coalition, throwOnFail)
 
         local zone = getZone(source)
         if zone then return DCAF.Location:New(zone) end
-            
+
         local unit = getUnit(source)
         if unit then return DCAF.Location:New(unit) end
 
         local group = getGroup(source)
         if group then return DCAF.Location:New(group) end
-            
+
         local static = getStatic(source)
         if static then return DCAF.Location:New(static) end
-            
+
         if throwOnFail then
             error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
         else
@@ -3929,6 +4160,12 @@ function GetGroupOrUnitName(source, mooseSuffixPattern)
     local group = getGroup(source)
     if group then
         return GetGroupOrUnitName(group.GroupName) end
+end
+
+function GetGroupType(group)
+    local validGroup = getGroup(group)
+    if not validGroup then return Error("GetGroupType :: cannot resolve `group`: " .. DumpPretty(group)) end
+
 end
 
 function IsTankerCallsign(controllable, ...)

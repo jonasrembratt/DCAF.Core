@@ -136,6 +136,33 @@ local GBAD_REGIMENT_GROUP_DB = {
     }
 }
 
+local GBAD_REGIMENT_EWR = {
+    _sets = {
+        -- key   = EWR name pattern (a.k.a. 'prefix')
+        -- value = {  set = SET_GROUP,  adv_set = SET_GROUP } 
+    }
+}
+
+--- This function will ensure all regiments utilizing the same "prefix" for identifying the EWRs they're to rely on, also end up
+--- using the same internal SET_GROUP object. This also makes it possible for 'Regiments' to rely on common EWR assets (outside of the)
+--- regiment geohraphical deployment zone
+function GBAD_REGIMENT_EWR:Harmonize(regiment)
+    local iads = regiment._iads
+    local sets = self._sets[regiment.EWRPrefix]
+    if not sets then
+        Debug("GBAD_REGIMENT_EWR:Harmonize :: " .. regiment.Name .. " :: prefix: " .. regiment.EWRPrefix .. " :: stores EWR sets")
+        self._sets[regiment.EWRPrefix] = {
+            set = iads.EWR_Group,
+            adv_set = iads.Adv_EWR_Group,
+        }
+    else
+        Debug("GBAD_REGIMENT_EWR:Harmonize :: " .. regiment.Name .. " :: " .. regiment.EWRPrefix .. " :: assigns harmonized EWR sets")
+        iads.EWR_Group = sets.set
+        iads.Adv_EWR_Group = sets.adv_set
+    end
+    return regiment
+end
+
 function GBAD_REGIMENT_GBAD_PROPERTIES:New(typeName, role, tier, mobile)
     if not isAssignedString(typeName) then
         error("GBAD_REGIMENT_GBAD_PROPERTIES:New :: `typeName` must be assigned string, but was: " .. DumpPretty(typeName)) end
@@ -303,7 +330,8 @@ function GBAD_REGIMENT_GROUP_INFO:New(regiment, group, isInitialSpawn, isZoneLoc
     end
     local info = GBAD_REGIMENT_GROUP_DB.GroupIndex[key]
     if info then
-        -- g_p was already indexed (by a different GBAD regiment)
+        -- group was already indexed (by a different GBAD regiment)
+Debug("nisse -- group was already indexed (by a different GBAD regiment): " .. group.GroupName)
         if DCAF.Debug and regimentIndex[key] then
             -- ensure same regiment doesn't index twice
             error("GBAD_REGIMENT_GROUP_INFO:New :: group '" .. key .. "' was already indexed by regiment '" .. regiment.Name .. "'")
@@ -1020,16 +1048,21 @@ local function gbadRegimentSetZones(regiment, accept, reject, conflict)
 
     if regiment._iads then
         regiment._iads:AddZones(ensureList(accept), ensureList(reject), ensureList(conflict))
-        if regiment._shootAndScootPrefix then
-            local setZones = SET_ZONE:New():FilterPrefixes(regiment._shootAndScootPrefix):FilterOnce()
-            if setZones:Count() > 0 then
-                regiment._iads:AddScootZones(setZones)
-            end
-        end
         return regiment
     end
 
     regiment._zones = { _accept = accept, _reject = reject, _conflict = conflict }
+    return regiment
+end
+
+local function gbadRegimentSetSNSZones(regiment)
+Debug(regiment.ClassName .. "/gbadRegimentSetSNSZones :: regiment._iads.Shorad: " .. Dump(regiment._iads.Shorad))
+
+    if not regiment._iads or not regiment._shootAndScootPrefix then return end
+    local setZones = SET_ZONE:New():FilterPrefixes(regiment._shootAndScootPrefix):FilterOnce()
+    if setZones:Count() > 0 then
+        regiment._iads:AddScootZones(setZones)
+    end
     return regiment
 end
 
@@ -1060,8 +1093,13 @@ local function gbadRegimentInitAfterStart(regiment)
     end
 end
 
-function DCAF.GBAD.Regiment:InitSNSZonesPrefix(prefix)
+function DCAF.GBAD.Regiment:InitSNSZones(prefix, minDistance, maxDistance)
+    if not isAssignedString(prefix) then return Error("DCAF.GBAD.Regiment:InitSNSZones :: `prefix` must be assigned string, but was: " .. DumpPretty(prefix), self) end
     self._shootAndScootPrefix = prefix
+    if minDistance ~= nil and (not isNumber(minDistance) or minDistance < 1) then return Error("DCAF.GBAD.Regiment:InitSNSZones :: `minDistance` must be positive (>0) number, but was: " .. DumpPretty(minDistance), self) end
+    self._shootAndScootMinDistance = minDistance
+    if maxDistance ~= nil and (not isNumber(maxDistance) or maxDistance < 1) then return Error("DCAF.GBAD.Regiment:InitSNSZones :: `maxDistance` must be positive (>0) number, but was: " .. DumpPretty(maxDistance), self) end
+    self._shootAndScootMaxDistance = maxDistance
     return self
 end
 
@@ -1197,7 +1235,7 @@ function DCAF.GBAD.Regiment:New(name, coalition, zones, hq, mode, sams, ewrs, aw
     end
     local isStaticMode = regiment.Mode == DCAF.GBAD.RegimentMode.Static
     gbadRegiment_filterAndIndexGroups(regiment, regiment.HQ, nil, true, GBAD_REGIMENT_GROUP_CATEGORY.HQ)
-    gbadRegiment_filterAndIndexGroups(regiment, set_ewrs, set_zone, true, GBAD_REGIMENT_GROUP_CATEGORY.EWR)
+    gbadRegiment_filterAndIndexGroups(regiment, set_ewrs, nil --[[set_zone]], true, GBAD_REGIMENT_GROUP_CATEGORY.EWR)
     gbadRegiment_filterAndIndexGroups(regiment, set_sams, set_zone, isStaticMode, GBAD_REGIMENT_GROUP_CATEGORY.SAM)
     gbadRegiment_filterAndIndexGroups(regiment, nil, regiment.AWACS, isStaticMode, GBAD_REGIMENT_GROUP_CATEGORY.AWACS)
     regiment._set_ewrs = set_ewrs
@@ -1926,7 +1964,7 @@ Debug("nisse - GBAD.Regiment/onafterManageEvasion :: .SuppressedGroups: " .. Dum
             -- local mindist = 100                                          -- //hacked//
             -- local maxdist = 5000                                         -- //hacked// -- changes from 3kn to 5km AO
             if Shorad and Shorad:IsAlive() then
-              local possibleZones = getPossibleShootAndScootZones(self.SkateZones.Set, Shorad, 100, 5000)
+              local possibleZones = getPossibleShootAndScootZones(self.SkateZones.Set, Shorad, regiment._shootAndScootMinDistance or 100, regiment._shootAndScootMaxDistance or 5000)
             --   local NowCoord = Shorad:GetCoordinate()                    -- //hacked//
             --   for _,_zone in pairs(self.SkateZones.Set) do               -- //hacked//
             --     local zone = _zone -- Core.Zone#ZONE_RADIUS              -- //hacked//
@@ -1997,8 +2035,9 @@ function DCAF.GBAD.Regiment:Start()
     if isStaticMode then
         self:Activate()
     end
+    GBAD_REGIMENT_EWR:Harmonize(self)
     GBAD_REGIMENT_GROUP_DB.SpawnAllInitial(self, includeSpawnedInitialInIADS)
-
+    
     if not isStaticMode then
         -- spawn TELAR vehicles to create threat rings...
         if isAssignedString(GBAD_REGIMENT_DEFAULTS.PrebriefedPrefix) then
@@ -2027,7 +2066,9 @@ function DCAF.GBAD.Regiment:Activate(info, spawnDelegate)
         self.MaxActiveSAMsShort or GBAD_REGIMENT_DEFAULTS.MaxActiveSams.Short,
         self.MaxActiveSAMsMid or GBAD_REGIMENT_DEFAULTS.MaxActiveSams.Mid,
         self.MaxActiveSAMsLong or GBAD_REGIMENT_DEFAULTS.MaxActiveSams.Long)
+    gbadRegimentSetSNSZones(self)
     self._iads:Start()
+
     if isBoolean(self.Debug) then
         self._iads:Debug(self.Debug)
         if self.Debug == true then
