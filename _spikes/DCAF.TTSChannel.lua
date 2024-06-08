@@ -393,13 +393,14 @@ Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
                 local kp
                 local omitMapElement = self.MGRS_OmitMapComponent or TTSChannel_DEFAULTS.MGRS_OmitMapComponent
                 if q == KEYPAD_QUALIFIER then
-                    local map, grid, keypad = coord:ToKeypad()
-                    if not map then
+                    -- local map, grid, keypad = coord:ToKeypad()
+                    local keypad = coord:ToKeypad()
+                    if not keypad then
                         kp = "KEYPAD ERROR"
                     elseif not omitMapElement then
-                        kp = "Grid! " .. PhoneticAlphabet:Convert(map .. " " .. grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad, true)
+                        kp = "Grid! " .. PhoneticAlphabet:Convert(keypad.Map .. " " .. keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
                     else
-                        kp = "Grid! " .. PhoneticAlphabet:Convert(grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad, true)
+                        kp = "Grid! " .. PhoneticAlphabet:Convert(keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
                     end
                 elseif q == MGRS_QUALIFIER then
                     local mgrs = coord:ToMGRS()
@@ -425,6 +426,14 @@ Debug("nisse - DCAF.TTSChannel_substituteLocations :: map: " .. DumpPretty(mgrs)
                     out = out .. kp
                     text = string.sub(text, e+1)
                 end
+                s, q, e = findLocation()
+                if s and s > 1 then
+                    out = out .. string.sub(text, 1, s-1)
+                end
+            else
+                Error("DCAF.TTSChannel:Message_substituteLocations :: could not resolve '" .. q .. "' location: " .. ident)
+                text = string.sub(text, e+1)
+                out = out .. string.sub(ident, 1, s-1)
                 s, q, e = findLocation()
                 if s and s > 1 then
                     out = out .. string.sub(text, 1, s-1)
