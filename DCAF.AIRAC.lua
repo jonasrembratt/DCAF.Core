@@ -1849,6 +1849,15 @@ function DCAF.NAVAID:New(map, name, coordinate, type, hidden)
     return navaid
 end
 
+local locationNavaidDelegate = DCAF.LocationDelegate:New()
+function locationNavaidDelegate:ResolveLocation(source)
+    if isClass(source, DCAF.NAVAID) then
+        return DCAF.Location:NewRaw(source.Name, source, source.Coordinate)
+    end
+end
+
+DCAF.Location.AddDelegate(locationNavaidDelegate)
+
 local _DCAF_defaultMap
 
 function DCAF.NAVAID:NewFix(name, coordinate, map)
@@ -2231,14 +2240,14 @@ function DCAF.AIR_ROUTE:NewArrival(name, runways, route, routeMissedApproach)
 
     local r = DCAF.AIR_ROUTE:New(name, route, DCAF.AIR_ROUTE_PHASE.Land, DCAF.AIR_ROUTE_PHASE.STAR)
     r.Runways = runways
-Debug("nisse - DCAF.AIR_ROUTE:NewArrival :: " .. name .. " :: routeMissedApproach: " .. Dump(routeMissedApproach))
+-- Debug("nisse - DCAF.AIR_ROUTE:NewArrival :: " .. name .. " :: routeMissedApproach: " .. Dump(routeMissedApproach))
     if isAssignedString(routeMissedApproach) then
         r.MissedApproachRoute = DCAF.AIR_ROUTE:New("MISSED APPROACH - " .. name, routeMissedApproach, DCAF.AIR_ROUTE_PHASE.Missed, DCAF.AIR_ROUTE_PHASE.STAR)
 
-Debug("nisse - DCAF.AIR_ROUTE:NewArrival :: " .. name .. " :: has #route: " .. #r.Waypoints, 1)
-for i, wp in ipairs(r.Waypoints) do   
-Debug("nisse - DCAF.AIR_ROUTE:NewArrival :: " .. name .. " :: wp#" .. i .. ": " .. DumpPretty({ name = wp.name, proc = wp.proc }))
-end        
+-- Debug("nisse - DCAF.AIR_ROUTE:NewArrival :: " .. name .. " :: has #route: " .. #r.Waypoints, 1)
+-- for i, wp in ipairs(r.Waypoints) do   
+-- Debug("nisse - DCAF.AIR_ROUTE:NewArrival :: " .. name .. " :: wp#" .. i .. ": " .. DumpPretty({ name = wp.name, proc = wp.proc }))
+-- end  
     end
     return r
 end
@@ -2569,9 +2578,9 @@ function DCAF.AIR_ROUTE:NewFromNavaids(name, idents, phase, proc, debug)
 
     local function makeRouteWaypoint(waypoint, index)
         local phase = phase or DCAF.AIR_ROUTE_PHASE.Enroute
-        if isClass(waypoint, AIRAC_IDENT.ClassName) and waypoint.Coordinate then
+        if isClass(waypoint, AIRAC_IDENT) and waypoint.Coordinate then
             waypoint = waypoint:AirTurnpoint()
-        elseif isClass(waypoint, DCAF.NAVAID.ClassName) then
+        elseif isClass(waypoint, DCAF.NAVAID) then
             waypoint = waypoint:AirTurnpoint()
         elseif isAirbase(waypoint) then
             local airbase = waypoint
@@ -2613,7 +2622,7 @@ function DCAF.AIR_ROUTE:NewFromNavaids(name, idents, phase, proc, debug)
             if not isClass(wp, AIRAC_IDENT) then
                 table.insert(waypoints, wp)
             elseif wp.IsArc then
-Debug("nisse - generateArcsAndTurns ::wp:" .. DumpPretty(wp))                
+-- Debug("nisse - generateArcsAndTurns ::wp:" .. DumpPretty(wp))                
                 local location = DCAF.AIRAC:GetLocation(wp.ArcIdent)
                 local coordinates = getArcCoordinates(location, wp.ArcDistance, wp.ArcRadialStart, wp.ArcRadialEnd)
                 local speed = wp.ArcSpeed

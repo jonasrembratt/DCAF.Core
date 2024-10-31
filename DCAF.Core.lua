@@ -57,6 +57,11 @@ DCAF.AltitudeType = {
     MSL = "MSL"             -- Mean Sea Level
 }
 
+DCAF.Units = {
+    Imperial = "Imperial", -- feet / nautical miles
+    Metric = "Metric"      -- meters / klicks
+}
+
 local _debugId = 0
 local function get_next_debugId()
     _debugId = _debugId + 1
@@ -208,8 +213,22 @@ VariableValue = {
 }
 
 function isString( value ) return type(value) == "string" end
+function isAssignedString( value )
+    if not isString(value) then
+        return false end
+
+    return string.len(value) > 0
+end
 function isBoolean( value ) return type(value) == "boolean" end
 function isNumber( value ) return type(value) == "number" end
+function isStringNumber( value )
+    if not isAssignedString(value) then return end
+    if string.len(value) == 1 then
+        local c = value
+        return c == '0' or c == '1' or c == '2' or c == '3' or c == '4' or c == '5' or c == '6' or c == '7' or c == '8' or c == '9'
+    end
+    return value:match("^%-?%d+$")
+end
 function isTable( value ) return type(value) == "table" end
 function isFunction( value ) return type(value) == "function" end
 function isClass( value, class )
@@ -232,12 +251,13 @@ function isStatic( value ) return isClass(value, STATIC) end
 function isLocation( value ) return isClass(value, DCAF.Location) end
 function isVariableValue( value ) return isClass(value, VariableValue) end
 function isCoalition( value ) return value == coalition.side.BLUE or value == coalition.side.RED or value == coalition.side.NEUTRAL end
-function isAssignedString( value )
-    if not isString(value) then
-        return false end
 
-    return string.len(value) > 0
+function isUnits(value)
+    if not isAssignedString(value) then return end
+    return value == DCAF.Units.Imperial
+        or value == DCAF.Units.Metric
 end
+
 function getTableType(table)
     if not isTable(table) then
         return end
@@ -430,7 +450,7 @@ Color = {
 
 
 -- ///////////////////////////////////////////////////////////////////
--- Unit information
+-- Unit information (see https://en.wikipedia.org/wiki/NATO_Joint_Military_Symbology)
 
 DCAF_UnitClass = {
     -- Unknown
@@ -444,7 +464,9 @@ DCAF_UnitClass = {
     AntiTank = "Anti Tank",
     Armor = "Armor",
     Artillery = "Artillery",
+    Mortar = "Mortar",
     CombinedManoeuvre = "Combined Manoeuvre", -- IFV / APC etc.
+    UnarmoredArmed = "Gun equipped vehicle",  -- Gun mounted on otherwise unarmored bvehicle.
     Engineer = "Engineer",
     HQ = "HQ",
     Infantry = "Infantry",
@@ -455,6 +477,17 @@ DCAF_UnitClass = {
     Transport = "Transport",
     -- Navy
     Navy = "Navy",
+}
+
+DCAF_UnitClassModifier = {
+    Airborne = "Airborne",
+    Parachute = "Parachute",
+    Airmobile = "Airmobile",
+    Amphibious = "Amphibious",
+    Motorized = "Motorized",
+    Mountain = "Mountain",
+    CannonOrGun = "CannonOrGun",
+    WheeledCrossCountry = "Wheeled cross country",
 }
 
 local function buildUnitClassWeight(list)
@@ -471,6 +504,7 @@ local DCAF_DefaultGroundUnitClassWeight = buildUnitClassWeight({
     DCAF_UnitClass.AirDefence,
     DCAF_UnitClass.Artillery,
     DCAF_UnitClass.CombinedManoeuvre,
+    DCAF_UnitClass.Mortar,
     DCAF_UnitClass.Missile,
     DCAF_UnitClass.AntiTank,
     DCAF_UnitClass.Engineer,
@@ -532,6 +566,7 @@ ENUMS.UnitType.F14A135GR = DCAF_UnitTypeInfo:New("F-14A-135-GR", Unit.Category.A
 ENUMS.UnitType.F14B = DCAF_UnitTypeInfo:New("F-14B", Unit.Category.AIRPLANE, "Tomcat", DCAF_UnitClass.FixedWing)
 ENUMS.UnitType.FA18C_hornet = DCAF_UnitTypeInfo:New("FA-18C_hornet", Unit.Category.AIRPLANE, {"Hornet", "Bug"}, DCAF_UnitClass.FixedWing)
 ENUMS.UnitType.C_130 = DCAF_UnitTypeInfo:New("C-130", Unit.Category.AIRPLANE, {"C-130", "Hercules"}, DCAF_UnitClass.FixedWing)
+
 -- Ground Units // Armor
 ENUMS.UnitType.T55 = DCAF_UnitTypeInfo:New("T-55", Unit.Category.GROUND, {"T-55", "MBT T-55"}, DCAF_UnitClass.Armor)
 ENUMS.UnitType.T72B = DCAF_UnitTypeInfo:New("T-72B", Unit.Category.GROUND, {"T-72B", "MBT T-72"}, DCAF_UnitClass.Armor)
@@ -550,6 +585,7 @@ ENUMS.UnitType.Leopard_2A4 = DCAF_UnitTypeInfo:New("leopard-2A4", Unit.Category.
 ENUMS.UnitType.Leopard_2A4_trs = DCAF_UnitTypeInfo:New("leopard-2A4_trs", Unit.Category.GROUND, {"Leopard 2A4 Trs", "MBT Leopard"}, DCAF_UnitClass.Armor)
 ENUMS.UnitType.Leopard_2A5 = DCAF_UnitTypeInfo:New("Leopard-2A5", Unit.Category.GROUND, {"Leopard 2A5", "MBT Leopard"}, DCAF_UnitClass.Armor)
 ENUMS.UnitType.Leopard_2 = DCAF_UnitTypeInfo:New("Leopard-2", Unit.Category.GROUND, {"Leopard-2", "MBT Leopard"}, DCAF_UnitClass.Armor)
+
 -- Ground Units // APC, Combined Manoeuvre
 ENUMS.UnitType.AAV7 = DCAF_UnitTypeInfo:New("AAV7", Unit.Category.GROUND, {"AAV7 Amphibious"}, DCAF_UnitClass.CombinedManoeuvre)
 ENUMS.UnitType.BTR_80 = DCAF_UnitTypeInfo:New("BTR-80", Unit.Category.GROUND, {"BTR-80"}, DCAF_UnitClass.CombinedManoeuvre)
@@ -572,6 +608,11 @@ ENUMS.UnitType.M1126_Stryker_ICV = DCAF_UnitTypeInfo:New("M1126 Stryker ICV", Un
 ENUMS.UnitType.M_2_Bradley = DCAF_UnitTypeInfo:New("M-2 Bradley", Unit.Category.GROUND, {"M2A2 Bradley"}, DCAF_UnitClass.CombinedManoeuvre)
 ENUMS.UnitType.Marder = DCAF_UnitTypeInfo:New("Marder", Unit.Category.GROUND, {"Marder"}, DCAF_UnitClass.CombinedManoeuvre)
 ENUMS.UnitType.MCV_80 = DCAF_UnitTypeInfo:New("MCV-80", Unit.Category.GROUND, {"Warrior"}, DCAF_UnitClass.CombinedManoeuvre)
+
+-- Unarmored, modified vehicles (eg. pickup trucks with mounted machines guns etc)
+ENUMS.UnitType.HL_DSHK = DCAF_UnitTypeInfo:New("HL_DSHK", Unit.Category.GROUND, {"Armored car"}, DCAF_UnitClass.UnarmoredArmed)
+ENUMS.UnitType.HL_KORD = DCAF_UnitTypeInfo:New("HL_KORD", Unit.Category.GROUND, {"Armored car"}, DCAF_UnitClass.UnarmoredArmed)
+
 -- Ground Units // Artillery, Howizer
 ENUMS.UnitType.LeFH_18_40_105 = DCAF_UnitTypeInfo:New("LeFH_18-40-105", Unit.Category.GROUND, {"LeFH-18 105mm", "Howizer"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.M2A1_105 = DCAF_UnitTypeInfo:New("M2A1-105", Unit.Category.GROUND, {"M2A1 105mm", "Howizer"}, DCAF_UnitClass.Artillery)
@@ -579,17 +620,21 @@ ENUMS.UnitType.Pak40 = DCAF_UnitTypeInfo:New("Pak40", Unit.Category.GROUND, {"Pa
 ENUMS.UnitType._2A18M = DCAF_UnitTypeInfo:New("2A18M", Unit.Category.GROUND, {"2A18M D-30", "Howizer"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.L118_Unit = DCAF_UnitTypeInfo:New("L118_Unit", Unit.Category.GROUND, {"L118 Light Gun", "Howizer"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.L118_Unit = DCAF_UnitTypeInfo:New("L118_Unit", Unit.Category.GROUND, {"L118 Light Gun", "Howizer"}, DCAF_UnitClass.Artillery) -- TODO duplicate
+
 -- Ground Units // Artillery, MLRS
 ENUMS.UnitType.Smerch = DCAF_UnitTypeInfo:New("Smerch", Unit.Category.GROUND, {"9A52 Smerch CM 300mm", "Smerch"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.Smerch_HE = DCAF_UnitTypeInfo:New("Smerch_HE", Unit.Category.GROUND, {"9A52 Smerch HE 300mm", "Smerch"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.Uragan_BM_27 = DCAF_UnitTypeInfo:New("Uragan_BM-27", Unit.Category.GROUND, {"9K57 Uragan BM-27 220mm", "Uragan"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.Grad_URAL = DCAF_UnitTypeInfo:New("Grad-URAL", Unit.Category.GROUND, {"BM-21 Grad 122mm", "Grad"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.MLRS = DCAF_UnitTypeInfo:New("MLRS", Unit.Category.GROUND, {"MLRS M270 227mm", "MLRS"}, DCAF_UnitClass.Artillery)
+
 -- Ground Units // Artillery, Rocket pods on pickup vehicle
 ENUMS.UnitType.HL_B8M1 = DCAF_UnitTypeInfo:New("HL_B8M1", Unit.Category.GROUND, {"HL with B8M1 80mm", "Rocket pod on Pickup"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.tt_B8M1 = DCAF_UnitTypeInfo:New("tt_B8M1", Unit.Category.GROUND, {"LC with B8M1 80mm", "Rocket pod on Pickup"}, DCAF_UnitClass.Artillery)
+
 -- Ground Units // Artillery, Mortar
-ENUMS.UnitType._2B11_mortar = DCAF_UnitTypeInfo:New("2B11 mortar", Unit.Category.GROUND, {"2B11 120mm", "Mortar"}, DCAF_UnitClass.Artillery)
+ENUMS.UnitType._2B11_mortar = DCAF_UnitTypeInfo:New("2B11 mortar", Unit.Category.GROUND, {"2B11 120mm", "Mortar"}, DCAF_UnitClass.Mortar)
+
 -- Ground Units // Self propelled howizer
 ENUMS.UnitType.PLZ05 = DCAF_UnitTypeInfo:New("PLZ05", Unit.Category.GROUND, {"PLZ-05", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.SAU_Gvozdika = DCAF_UnitTypeInfo:New("SAU Gvozdika", Unit.Category.GROUND, {"2S1 Gvozdika 122mm", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
@@ -599,10 +644,12 @@ ENUMS.UnitType.SpGH_Dana = DCAF_UnitTypeInfo:New("SpGH_Dana", Unit.Category.GROU
 ENUMS.UnitType.M_109 = DCAF_UnitTypeInfo:New("M-109", Unit.Category.GROUND, {"M-109 Paladin 155mm", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.T155_Firtina = DCAF_UnitTypeInfo:New("T155_Firtina", Unit.Category.GROUND, {"T155 Firtina 155mm", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
 ENUMS.UnitType.SAU_2_C9 = DCAF_UnitTypeInfo:New("SAU 2-C9", Unit.Category.GROUND, {"2S9 Nona 120mm M", "Self-propelled howizer"}, DCAF_UnitClass.Artillery)
+
 -- Ground Units // Missiles
 ENUMS.UnitType.Silkworm_SR = DCAF_UnitTypeInfo:New("Silkworm_SR", Unit.Category.GROUND, {"AShM Silkworm SR", "Silkworm radar"}, DCAF_UnitClass.Missile)
 ENUMS.UnitType.hy_launcher = DCAF_UnitTypeInfo:New("hy_launcher", Unit.Category.GROUND, {"AShM SS-N-2 Silkworm", "Silkworm anti-ship missile"}, DCAF_UnitClass.Missile)
 ENUMS.UnitType.Scud_B = DCAF_UnitTypeInfo:New("Scud_B", Unit.Category.GROUND, {"SS-1C Scud-B", "SCUD Missile"}, DCAF_UnitClass.Missile)
+
 -- Ground Units // Transport
 ENUMS.UnitType.GAZ_3308 = DCAF_UnitTypeInfo:New("GAZ-3308", Unit.Category.GROUND, {"GAZ-3308", "GAZ Truck"}, DCAF_UnitClass.Transport)
 ENUMS.UnitType.GAZ_66 = DCAF_UnitTypeInfo:New("GAZ-66", Unit.Category.GROUND, {"GAZ-66", "GAZ Truck"}, DCAF_UnitClass.Transport)
@@ -700,7 +747,7 @@ end
 function ResolveGroundGroupClass(source, classWeight)
     local validGroup = getGroup(source)
     if not validGroup then return Error("ResolveGroupClass :: could not resolve GROUP from `source`: " .. DumpPretty(source)) end
-    if not validGroup:IsGround() then Error("ResolveGroupClass :: group is not a ground type: " .. DumpPretty(validGroup.GroupName)) end
+    if not validGroup:IsGround() then return Debug("ResolveGroupClass :: group is not a ground type: " .. DumpPretty(validGroup.GroupName) .. " :: group type: " .. validGroup:GetTypeName()) end
     local units = validGroup:GetUnits()
 
     if isTable(classWeight) then
@@ -802,35 +849,39 @@ function stringSplit(s, sep)
 end
 
 function stringTrim(s)
-    local function countWhitespace(inc)
-        local count = 0
-        local start, last
-        if inc == 1 then
-            start = 1
-            last = #s
-        else
-            start = string.len(s)
-            last = 1
-        end
-        for i = start, last, inc do
-            local c = s:sub(i,i)
-            if c == ' ' or c == '\t' or c == '\n' then
-                count = count + 1
-            else
-                return count
-            end
-        end
-    end
-    local count = countWhitespace(1)
-    if count > 0 then
-        s = s:sub(count+1, #s)
-    end
-    count = countWhitespace(-1)
-    if count > 0 then
-        s = s:sub(1, #s - count)
-    end
-    return s
+    return (s:gsub("^%s*(.-)%s*$", "%1"))
 end
+
+-- function stringTrim(s)
+--     local function countWhitespace(inc)
+--         local count = 0
+--         local start, last
+--         if inc == 1 then
+--             start = 1
+--             last = #s
+--         else
+--             start = string.len(s)
+--             last = 1
+--         end
+--         for i = start, last, inc do
+--             local c = s:sub(i,i)
+--             if c == ' ' or c == '\t' or c == '\n' then
+--                 count = count + 1
+--             else
+--                 return count
+--             end
+--         end
+--     end
+--     local count = countWhitespace(1)
+--     if count > 0 then
+--         s = s:sub(count+1, #s)
+--     end
+--     count = countWhitespace(-1)
+--     if count > 0 then
+--         s = s:sub(1, #s - count)
+--     end
+--     return s
+-- end
 
 function fileExists(name)
     if not isAssignedString(name) then
@@ -1100,14 +1151,43 @@ PhoneticAlphabet = {
         ["0"] = "Zero",
         ["1"] = "One",
         ["2"] = "Two",
-        ["3"] = "Three",
+        ["3"] = "Tree",
         ["4"] = "Four",
         ["5"] = "Five",
         ["6"] = "Six",
         ["7"] = "Seven",
         ["8"] = "Eight",
         ["9"] = "Niner",
+    },
+    Teens = {
+        ["11"] = "Eleven",
+        ["12"] = "Twelve",
+        ["13"] = "Thirteen",
+        ["14"] = "Fourteen",
+        ["15"] = "Fifteen",
+        ["16"] = "Sixteen",
+        ["17"] = "Seventeen",
+        ["18"] = "Eighteen",
+        ["19"] = "Nineteen",
+    },
+    Tens = {
+        ["10"] = "Ten",
+        ["20"] = "Twenty",
+        ["30"] = "Thirty",
+        ["40"] = "Fourty",
+        ["50"] = "Fifty",
+        ["60"] = "Sixty",
+        ["70"] = "Seventy",
+        ["80"] = "Eighty",
+        ["90"] = "Ninety",
     }
+}
+
+PhoneticAlphabet.NumericPrecision = {
+    SingleDigit = 1,
+    Ten = 10,
+    Hundreds = 100,
+    Thousands = 1000
 }
 
 function PhoneticAlphabet:Convert(text, slow)
@@ -1125,6 +1205,74 @@ function PhoneticAlphabet:Convert(text, slow)
         out = out .. (p or c)
     end
     return stringTrim(out)
+end
+
+function PhoneticAlphabet:ConvertNumber(number, precision)
+    local s
+Debug("nisse - PhoneticAlphabet:ConvertNumber :: number: " .. Dump(number) .. " :: precision: " .. Dump(precision))
+    if number > 1000 then
+        local thousands = math.floor(number / 1000)
+Debug("nisse - PhoneticAlphabet:ConvertNumber :: thousands: " .. Dump(thousands))
+        if thousands < 10 then
+            s = self.Digit[tostring(thousands)] .. " tousand"
+            if precision == self.NumericPrecision.Thousands then return s end
+        elseif number < 20 then
+            s = self.Teens[tostring(thousands)] .. " tousand"
+            if precision == self.NumericPrecision.Thousands then return s end
+        elseif number < 100 then
+            s = self.Tens[tostring(thousands)] .. " tousand"
+            if precision == self.NumericPrecision.Thousands then return s end
+        elseif number < 1000 then
+            local h = number / 100
+            s = self.Digit[h] .. " hundred tousand"
+            if precision == self.NumericPrecision.Thousands then return s end
+        else -- todo - Do we need to consider millions and other silly high numbers for phonetic expression?
+            s = tostring(number)
+            if precision == self.NumericPrecision.Thousands then return s end
+        end
+        number = number - thousands*1000
+Debug("nisse - PhoneticAlphabet:ConvertNumber :: (thousands) ::number: " .. Dump(number))
+    end
+    if number > 100 then
+        local hundreds = math.floor(number / 100)
+Debug("nisse - PhoneticAlphabet:ConvertNumber :: hundreds: " .. Dump(hundreds))
+        if s then
+            s = s .. " " .. self.Digit[tostring(hundreds)] .. " hundred"
+        else
+            s = self.Digit[tostring(hundreds)] .. " hundred"
+        end
+Debug("nisse - PhoneticAlphabet:ConvertNumber :: hundreds :: s:" .. Dump(s))
+        if precision == self.NumericPrecision.Hundreds then return s end
+        number = number - hundreds*100
+    end
+    if number >= 20 then
+Debug("nisse - PhoneticAlphabet:ConvertNumber :: tens :: number: " .. Dump(number))
+        local tens = math.floor(number / 10) * 10
+Debug("nisse - PhoneticAlphabet:ConvertNumber :: tens:" .. Dump(tens))
+        number = number - tens
+        if s then
+            s = s .. " " .. self.Tens[tostring(tens)]
+        else
+            s = self.Tens[tostring(tens)]
+        end
+        if precision == self.NumericPrecision.Ten then return s end
+        number = number - tens
+    end
+    if number > 10 then
+Debug("nisse - PhoneticAlphabet:ConvertNumber :: teens :: number: " .. Dump(number))
+        if s then
+            s = s .. " " .. self.Teens[tostring(number)]
+        else
+            s = self.Teens[tostring(number)]
+        end
+    else
+        if s then
+            s = s .. " " .. self.Digit[tostring(number)]
+        else
+            s = self.Digit[tostring(number)]
+        end
+    end
+    return s
 end
 
 function DCAF.trimInstanceFromName( name, qualifierAt )
@@ -1193,7 +1341,12 @@ function UTILS.SecondsToClock(seconds, short, trimSeconds)
 end
 
 function DCAF.StackTrace(message)
-    return BASE.Debug.traceback()
+    if message then
+        return message .. " :: " .. debug.traceback()
+    else
+        return debug.traceback()
+    end
+    -- return BASE.Debug.traceback()
 end
 
 --- Schedule repeated invocation of a function
@@ -1427,16 +1580,16 @@ end
 
 function Minutes(seconds)
     if not isNumber(seconds) then
-        error("Minutes :: `value` must be a number but was " .. type(value)) end
+        error("Minutes :: `value` must be a number but was " .. type(seconds)) end
 
     return seconds * 60
 end
 
-function Hours(value)
+function Hours(seconds)
     if not isNumber(seconds) then
-        error("Hours :: `value` must be a number but was " .. type(value)) end
+        error("Hours :: `value` must be a number but was " .. type(seconds)) end
 
-    return value * 3600
+    return seconds * 3600
 end
 
 function NauticalMiles( nm )
@@ -1671,7 +1824,7 @@ end
 
 function dictCount(table)
     if not isTable(table) then
-        error("dictionaryCount :: `table` is of type " .. type(table)) end
+        error("dictCount :: `table` is of type " .. type(table)) end
 
     local count = 0
     for k, v in pairs(table) do
@@ -1707,9 +1860,9 @@ function listRandomItemWhere(list, criteriaFunc)
 end
 
 function listRandomItem(list, ignoreFunctions, nisse)
-if nisse then
-    Debug("nisse - listRandomItem :: list: " .. DumpPretty(list))
-end
+-- if nisse then
+--     Debug("nisse - listRandomItem :: list: " .. DumpPretty(list))
+-- end
     if not isList(list) then
         error("listRandomItem :: `list` must be list but was " .. type(list)) end
 
@@ -1758,14 +1911,17 @@ function tableIterateDelayed(table, func, interval, delay)
     end
 
     for key, value in pairs(table) do
-        scheduleIDs[key] = DCAF.delay(function() 
+        scheduleIDs[key] = DCAF.delay(function()
             if cancelled then return end
             local result = func(key, value)
             if result == false then cancelIteration() end
-        end, 
-        delay)
+        end, delay)
         delay = delay + interval
     end
+end
+
+function tableIterate(table, func)
+    return tableIterateDelayed(table, func, 0, 0)
 end
 
 function dictRandomKey(table, maxIndex, ignoreFunctions)
@@ -1886,7 +2042,7 @@ function activateGroupsStaggered(groups, interval, onActivatedFunc, delay, order
         return idxA < idxB
     end)
     tableIterateDelayed(sorted, function(_, group)
-        if not group:IsActive() then 
+        if not group:IsActive() then
             group:Activate()
             if isFunction(onActivatedFunc) then onActivatedFunc(group.__key, group) end
             Debug("activateGroupsStaggered :: group " .. group.GroupName .. " was activated")
@@ -2535,6 +2691,17 @@ function Debug( message )
     end
 end
 
+function DebugIf( criteriaFunc, message )
+    if not criteriaFunc() then return end
+    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
+    if (DCAF.Debug) then
+        BASE:E("DCAF-DBG @"..timestamp.." ===> "..tostring(message))
+    end
+    if (DCAF.DebugToUI) then
+        MESSAGE:New("DCAF-DBG: "..message):ToAll()
+    end
+end
+
 function Warning( message )
     local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
     BASE:E("DCAF-WRN @"..timestamp.."===> "..tostring(message))
@@ -2904,6 +3071,35 @@ DCAF.Location = {
     Type = nil          -- #string - type of location
 }
 
+local DCAF_Location_Delegates = {
+    -- list of #DCAF.LocationDelegate
+}
+
+DCAF.LocationDelegate = {
+    ClassName = "DCAF.LocationDelegate"
+    ----
+}
+
+function DCAF.LocationDelegate:New()
+    return DCAF.clone(DCAF.LocationDelegate)
+end
+
+function DCAF.LocationDelegate:ResolveLocation(source)
+end
+
+function DCAF.Location.AddDelegate(delegate)
+    if not isClass(delegate, DCAF.LocationDelegate) then return Error("DCAF.Location.AddDelegate :: `delegate` must be #" .. DCAF.LocationDelegate.ClassName .. ", but was: " .. DumpPretty(delegate)) end
+    DCAF_Location_Delegates[#DCAF_Location_Delegates+1] = delegate
+end
+
+function DCAF.Location:NewRaw(name, source, coordinate, coalition)
+    local location = DCAF.clone(DCAF.Location)
+    location.Name = name
+    location.Source = source
+    location.Coordinate = coordinate
+    return location
+end
+
 function DCAF.Location:NewNamed(name, source, coalition, throwOnFail)
     if source == nil then
         error("DCAF.Location:New :: `source` cannot be unassigned") end
@@ -2961,6 +3157,12 @@ function DCAF.Location:NewNamed(name, source, coalition, throwOnFail)
         return location
     else
         -- try resolve source...
+        for _, delegate in ipairs(DCAF_Location_Delegates) do
+            local resolvedLocation = delegate:ResolveLocation(source)
+            if resolvedLocation then
+                return resolvedLocation
+            end
+        end
         if coalition then
             local validCoalition = Coalition.Resolve(coalition)
             if not validCoalition then return Error("DCAF.Location:NewNamed :: `coalition` could not be resolved: " .. DumpPretty(coalition)) end
@@ -3157,6 +3359,12 @@ function DCAF.Location:IsGrounded(errorMargin)
     return not self:IsAirborne(errorMargin)
 end
 
+function DCAF.Location:HeadingTo(location)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return Error("DCAF.Location:HeadingTo :: cannot resolve `location`: " .. DumpPretty(location)) end
+    return self:GetCoordinate():HeadingTo(validLocation:GetCoordinate())
+end
+
 DCAF.ClosestUnits = {
     ClassName = "DCAF.ClosestUnits",
     Count = 0,
@@ -3170,16 +3378,24 @@ function DCAF.ClosestUnits:New()
 end
 
 function DCAF.ClosestUnits:Get(coalition, sortOnDistance)
-    local testCoaliton = Coalition.Resolve(coalition)
-    if not testCoaliton then
+    local validCoaliton = Coalition.Resolve(coalition)
+    if not validCoaliton then
         error("DCAF.ClosestUnits:Get :: cannot resolve #Coalition from: " .. DumpPretty(coalition)) end
 
-    local units = self.Units[testCoaliton]
-    if units and sortOnDistance then
+    local units = self.Units[validCoaliton]
+    if units and sortOnDistance == true then
         table.sort(units, function(a, b)
             return a.Distance <= b.Distance
         end)
     end
+    return units
+end
+
+function DCAF.ClosestUnits:GetSortedOnDistance()
+    local units = DCAF.clone(self.Units, false)
+    table.sort(units, function(a, b)
+        return a.Distance <= b.Distance
+    end)
     return units
 end
 
@@ -3191,6 +3407,17 @@ function DCAF.ClosestUnits:Set(unit, distance)
     self.Units[#self.Units+1] = { Unit = unit, Distance = distance, DistanceNM = UTILS.MetersToNM(distance) }
     self.Count = self.Count+1
     return self
+end
+
+function DCAF.ClosestUnits:ForEachUnit(func, coalition, sortOnDistance)
+    local units = self.Units
+    if sortOnDistance then
+        units = self:GetSortedOnDistance()
+    end
+    if not isFunction(func) then return Error("DCAF.ClosestUnits:ForEachUnit :: `func` must be function, but was: " .. DumpPretty(func)) end
+    for _, info in ipairs(units) do
+        func(info.Unit, info.Distance)
+    end
 end
 
 DCAF_GetAirborneUnits_Cache_TTL = 1
@@ -3262,7 +3489,8 @@ function GetAirborneUnits(coalition, cacheTTL, skip)
     end
 
     for _, group in pairs(_DATABASE.GROUPS) do
-        testMatch(group)
+        local dcsObject = Group.getByName( group.GroupName )
+        if dcsObject then testMatch(group) end
     end
     cache = {
         TTL = cacheTTL,
@@ -3273,7 +3501,7 @@ function GetAirborneUnits(coalition, cacheTTL, skip)
     return airborneUnits
 end
 
-function ScanAirborneUnits(location, range, coalition, breakOnFirst, measureSlantRange, cacheTTL, ignoreOwn)
+function ScanAirborneUnits(location, range, coalition, breakOnFirst, measureSlantRange, cacheTTL, ignoreOwn, ignoreAI)
     local closestUnits = DCAF.ClosestUnits:New()
     local validLocation = DCAF.Location.Resolve(location)
     if not validLocation then
@@ -3282,6 +3510,7 @@ function ScanAirborneUnits(location, range, coalition, breakOnFirst, measureSlan
     end
     local location = validLocation
     if not isBoolean(ignoreOwn) then ignoreOwn = true end
+    if not isBoolean(ignoreAI) then ignoreAI = false end
 
     local coordinate = location:GetCoordinate()
     local skip
@@ -3289,10 +3518,11 @@ function ScanAirborneUnits(location, range, coalition, breakOnFirst, measureSlan
         skip = { location.Source }
     end
     local airborneUnits = GetAirborneUnits(coalition, cacheTTL, skip)
+
     local function isMatch(unit)
         local coordUnit = unit:GetCoordinate()
-        if not coordUnit then
-            return end
+        if not coordUnit then return end
+        if ignoreAI and unit:GetPlayerName() == nil then return end
 
         local distance
         if measureSlantRange then
@@ -4110,6 +4340,23 @@ function GetFlag( name )
     return trigger.misc.getUserFlag( name )
 end
 
+function GetGroupTemplateName(group)
+    local s = group.GroupName
+    local c = string.sub(s, string.len(s))
+    local isDigit = isStringNumber(c)
+    if not isDigit then return s end
+    local len = string.len(s)
+    for i = len-1, 1, -1 do
+        c = string.sub(s, i, i)
+        if c == '#' then
+            s = string.sub(s, 1, i-1)
+            return s
+        end
+        isDigit = isStringNumber(c)
+        if not isDigit then return s end
+    end
+end
+
 function GetCallsign(source)
     local includeUnitNumber = false
     local unit = getUnit(source)
@@ -4165,7 +4412,7 @@ end
 function GetGroupType(group)
     local validGroup = getGroup(group)
     if not validGroup then return Error("GetGroupType :: cannot resolve `group`: " .. DumpPretty(group)) end
-
+    
 end
 
 function IsTankerCallsign(controllable, ...)
@@ -4393,13 +4640,13 @@ function DumpPretty(value, options)
         local indent = mkIndent(ilvl * idtSize)
 
         local function dumpKeyValue(k, v)
-            if isTable(v) and v.__index and not isAlreadyDumped(v) then
+            if isTable(v) and isTable(v.__index) and not isAlreadyDumped(v) then
                 table.insert(dumpedValues, v)
                 for ik, iv in pairs(v.__index) do
                     dumpKeyValue(ik, iv)
                 end
             end
-            
+
             if (options.includeFunctions or type(v) ~= "function") then
                 if isAlreadyDumped(v) then
                     if asJson then
@@ -4487,18 +4734,18 @@ function GetAltitudeAsAngelsOrCherubs( value )
     return "cherubs " .. tostring(UTILS.Round( cherubs, 0 ))
 end
 
-local function getRelativeDirection(heading, bearing)
+function GetRelativeDirection(heading, bearing)
     local rd = bearing - heading -- rd = relative direction
     if rd < -180 then
-        rd = rd +360
+        rd = rd + 360
     elseif rd > 180 then
-        rd = rd - 180
+        rd = rd - 360
     end
+if rd < -180 or rd > 180 then error("GetRelativeDirection (WTF!)") end -- nisse --
     return rd
 end
 
-
---- Returns an object with three values to describe the relative posiotion between two locations
+--- Returns an object with three values to describe the relative position between two locations
 function GetRelativePosition(source, target)
     local sourceLocation = DCAF.Location.Resolve(source)
     local targetLocation = DCAF.Location.Resolve(target)
@@ -4509,7 +4756,7 @@ function GetRelativePosition(source, target)
 
     local heading = sourceLocation:GetHeading()
     local bearing, slantRange = GetBearingAndSlantRange(source, target)
-    local rd = getRelativeDirection(heading, bearing)
+    local rd = GetRelativeDirection(heading, bearing)
     local sourceCoordinate = sourceLocation:GetCoordinate()
     local targetCoordinate = targetLocation:GetCoordinate()
     return {
@@ -4765,6 +5012,57 @@ function FindWaypointByName( source, name )
     return nil
 end
 
+function FindWaypointByPattern( source, pattern )
+    local route = nil
+    if isTable(source) and source.ClassName == nil then
+        -- assume route ...
+        route = source
+    end
+
+    if route == nil then
+        -- try get route from group ...
+        local group = getGroup( source )
+        if ( group ~= nil ) then
+            route = group:CopyRoute()
+        else
+            return nil end
+    end
+
+    for k, wp in pairs(route) do
+        if wp.name and string.find(wp.name, pattern) then
+            return { data = wp, index = k }
+        end
+    end
+    return nil
+end
+
+function FindWaypointsByName( source, ... )
+    local route = nil
+    if isTable(source) and source.ClassName == nil then
+        -- assume route ...
+        route = source
+    end
+
+    if route == nil then
+        -- try get route from group ...
+        local group = getGroup( source )
+        if ( group ~= nil ) then
+            route = group:CopyRoute()
+        else
+            return nil
+        end
+    end
+
+    local result = {}
+    for _, name in ipairs(arg) do
+        local info = FindWaypointByName( source, name )
+        if info then
+            result[#result+1] = info
+        end
+    end
+    return result
+end
+
 --- Returns estimated total time needed to execute a route
 -- @param #table Two or more waypoints
 -- @param #number (optional) A start coordinate (assuming time is required to reach 1st waypoint)
@@ -4825,7 +5123,22 @@ function COORDINATE:CalculateRouteETA(waypoints, startTime)
 end
 
 
-function RouteDirectTo( controllable, waypoint )
+function SetRoute( controllable, route )
+    if (controllable == nil) then
+        return exitWarning("SetRoute-? :: controllable not specified")
+    end
+    if (not isTable(route)) then
+        return exitWarning("SetRoute-? :: invalid route (not a table)")
+    end
+    local group = getGroup(controllable)
+    if (group == nil) then
+        return exitWarning("SetRoute-? :: group not found: "..Dump(controllable))
+    end
+    group:Route( route )
+    Trace("SetRoute-"..group.GroupName.." :: group route was set :: DONE")
+end
+
+function RouteDirectTo( controllable, waypoint, setRoute )
     if (controllable == nil) then
         return exitWarning("DirectTo-? :: controllable not specified")
     end
@@ -4861,23 +5174,10 @@ function RouteDirectTo( controllable, waypoint )
         table.insert(directToRoute, route[i])
     end
 
+    if setRoute == true then
+        SetRoute(group, directToRoute)
+    end
     return directToRoute
-
-end
-
-function SetRoute( controllable, route )
-    if (controllable == nil) then
-        return exitWarning("SetRoute-? :: controllable not specified")
-    end
-    if (not isTable(route)) then
-        return exitWarning("SetRoute-? :: invalid route (not a table)")
-    end
-    local group = getGroup(controllable)
-    if (group == nil) then
-        return exitWarning("SetRoute-? :: group not found: "..Dump(controllable))
-    end
-    group:Route( route )
-    Trace("SetRoute-"..group.GroupName.." :: group route was set :: DONE")
 end
 
 function ChangeSpeed( controllable, changeMPS )
@@ -5510,9 +5810,9 @@ function ROEAggressive( ... )
         else
             ROTEvadeFire( controllable )
             group:OptionAlarmStateRed()
-            Trace("ROEWeaponsFree-"..group.GroupName.." :: is alarm state RED")
+            Debug("ROEWeaponsFree-"..group.GroupName.." :: is alarm state RED")
             ROEWeaponFree( group )
-            Trace("ROEWeaponsFree-"..group.GroupName.." :: is weapons free")
+            Debug("ROEWeaponsFree-"..group.GroupName.." :: is weapons free")
         end
     end
 end
@@ -5829,8 +6129,6 @@ local _enteredUnitTimestamps = {
 
 function _e:onEvent( event )
 -- Debug("nisse - _e:onEvent-? :: event: " .. DumpPretty(event))
--- Debug("nisse -  world.event.S_EVENT_TAKEOFF: " ..  world.event.S_EVENT_TAKEOFF)
--- Debug("nisse - _e:onEvent :: world.event.S_EVENT_MAX: " .. Dump(world.event.S_EVENT_MAX))
 
     if event.id == world.event.S_EVENT_MISSION_END then
         MissionEvents:Invoke( _missionEventsHandlers._missionEndHandlers, event )
@@ -6849,7 +7147,7 @@ local function startMonitorZoneEvents()
             zoneEvent:Remove()
         end
 
-        -- filter-cenric zone events ...
+        -- filter-centric zone events ...
         removeZoneEvents = {}
         for _, zoneEvent in ipairs(FilterCentricZoneEvents) do
             if zoneEvent:EvaluateForFilter() then
@@ -8594,6 +8892,37 @@ end
 
 function ___dcaf_callback___(id)
     DCAF_CALLBACKS:Callback(id)
+end
+
+--- Returns the waypoint of a group that is closest to a specified location
+-- @param #Any group - a GROUP, UNIT, or the name of a group/unit
+-- @param #Any group - a GROUP, UNIT, or the name of a group/unit
+-- returns #waypoint, #num (index of waypoint), #num (distance from location to waypoint), #route (table of waypoints)
+function GetClosestWaypoint(group, location)
+    local validGroup = getGroup(group)
+    if not validGroup then return Error("getClosestWaypoint :: cannot resolve GROUP from `source`: " .. DumpPretty(group)) end
+    local route = getGroupRoute(validGroup)
+    local validLocation
+    if location == nil then
+        validLocation = DCAF.Location.Resolve(validGroup)
+    else
+        validLocation = DCAF.Location.Resolve(location)
+        if not validLocation then return Error("getClosestWaypoint :: cannot resolve location from `loc`: " .. DumpPretty(location)) end
+    end
+    local minDistance = 9999999999
+    local closestWP
+    local closestWPIndex
+    local coordSource = validLocation:GetCoordinate()
+    for index, wp in ipairs(route) do
+        local coordWP = COORDINATE_FromWaypoint(wp)
+        local distance = coordSource:Get2DDistance(coordWP)
+        if distance < minDistance then
+            closestWP = wp
+            closestWPIndex = index
+            minDistance = distance
+        end
+    end
+    return closestWP, closestWPIndex, minDistance, route
 end
 
 function WaypointCallback(waypoint, func, oneTime, name)
@@ -11624,7 +11953,7 @@ end
 
 
 -- /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
---                                                             EXPERIMENT - WEAPONS SIMULATION
+--                                                             WEAPONS SIMULATION
 -- /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 local __wpnSim_count = 0
@@ -11641,6 +11970,7 @@ DCAF.WeaponSimulationConfig = {
   ExcludeAiTargets = true,
   ExcludePlayerTargets = false,
   SafetyDistance = 300, -- (meters) missiles deactivates at this distance to target
+  InhibitFratricideDetection = false,       -- when set, the weapons simulation will not detect and notify fratricide events
   AudioSimulatedHitSelf = "SimulatedWpnHitSelf.ogg",
   AudioSimulatedHitTarget = "SimulatedWpnHitTarget.ogg",
   AudioSimulatedHitFratricide = "SimulatedWpnHitFratricide.ogg",
@@ -11849,7 +12179,7 @@ function DCAF.WeaponSimulation:_OnWeaponHits(wpn, iniUnit, tgtUnit)
     local iniCoalition = iniGroup:GetCoalitionName()
     local tgtCoalition = tgtGroup:GetCoalitionName()
     local msg = string.format("%s was hit by %s (%s)", tgtActor, iniGroup.GroupName, iniGroup:GetTypeName())
-    if tgtCoalition == iniCoalition then
+    if tgtCoalition == iniCoalition and not self.Config.InhibitFratricideDetection then
         -- todo What sound for fratricide?
         msg = "FRATRICIDE! :: " .. msg
         MessageTo(iniGroup, self.Config.AudioSimulatedHitFratricide)
@@ -12471,7 +12801,8 @@ end
 DCAF.BlastDamageOptions = {
     ClassName = "DCAF.BlastDamageOptions",
     --
-    LargerExplosions = true,        -- secondary explosions on top of weapon impact points, dictated by the values in the explTable
+    LargerExplosions = false,       -- secondary explosions on top of weapon impact points, dictated by the values in the explTable
+    GlobalMultiplier = .4,          -- multiplier applied to all blast damage effect
     RocketMultiplier = 1.3,         -- multiplied by the explTable value for rockets
     BlastSearchRadius = 100,        -- this is the max size of any blast wave radius, since we will only find objects within this zone
     BlastStun = false,              -- not implemented
@@ -12800,6 +13131,10 @@ function DCAF.BlastDamage.WpnTracker:OnUpdate(wpnTrack)
     else
         -- ensure we do not track trajectories for unsupported ordnance...
         wpnTrack._blastDamageExplosion = getWeaponExplosive(wpnTrack.Type)
+        if wpnTrack._blastDamageExplosion then
+            wpnTrack._blastDamageExplosion = wpnTrack._blastDamageExplosion * DCAF.BlastDamage.Options.GlobalMultiplier
+        end
+
 -- Debug("DCAF.BlastDamage.WpnTracker:OnUpdate (bbb) :: wpn: '" .. wpnTrack.Type .. "' :: _blastDamageExplosion: " .. Dump(wpnTrack._blastDamageExplosion))
         if wpnTrack._blastDamageExplosion > 0 then
             return end
