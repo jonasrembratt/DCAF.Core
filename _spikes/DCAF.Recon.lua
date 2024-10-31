@@ -285,7 +285,7 @@ local function updateGroupStatusReport(recon, report, spoken)
     local speed = group:GetVelocityMPS()
     local direction = CardinalDirection.FromHeading(group:GetHeading())
     local group = report.Group
-Debug("nisse - updateGroupStatusReport :: group: " .. report.Group.GroupName .. " :: report: " .. DumpPretty(report))
+-- Debug("nisse - updateGroupStatusReport :: group: " .. report.Group.GroupName .. " :: report: " .. DumpPretty(report))
     if group:IsGround() then
         local distRoad = coordGroup:Get2DDistance(coordGroup:GetClosestPointToRoad())
         if distRoad < 4 then
@@ -324,6 +324,7 @@ Debug("nisse - updateGroupStatusReport :: group: " .. report.Group.GroupName .. 
     local altitude = ""
     local isOnGround = IsOnGround(group)
     local isParked = false
+-- Debug("nisse - updateGroupStatusReport :: group: " .. group.GroupName .. " :: speed: " .. speed)
     if speed < 1 then
         speed = "Parked. "
         isParked = true
@@ -338,9 +339,9 @@ Debug("nisse - updateGroupStatusReport :: group: " .. report.Group.GroupName .. 
     elseif speed > 308 then
         speed = "Fast. "
     end
-    local altMSL = GROUP:GetAltitude(false)
+    local altMSL = group:GetAltitude(false)
     if altMSL then
-        altitude = UTILS.MetersToFeet(altMSL) .. " feet"
+        altitude = math.floor(UTILS.MetersToFeet(altMSL)) .. " feet"
         if spoken then 
             onRoad = " feet"
         else
@@ -387,7 +388,7 @@ function DCAF.Recon:Send(message)
 end
 
 function DCAF.Recon:OnDetectedDefault(group)
-Debug("nisse - DCAF.Recon:OnDetectedDefault :: group: " .. group.GroupName .. " :: ._reports: " .. DumpPretty(self._reports))
+-- Debug("nisse - DCAF.Recon:OnDetectedDefault :: group: " .. group.GroupName .. " :: ._reports: " .. DumpPretty(self._reports))
     local report = self:SubmitReport(Recon_GroupStatusReport:New(self, group, spoken))
     local ident = self:GetGroupReportingName(group)
     if self._tts then
@@ -422,10 +423,6 @@ function Recon_GroupStatusReport:_drawNatoHostileFrame()
 end
 
 function Recon_GroupStatusReport:Draw(recon, ident, icon, vector, text, alpha)
-if self.Group.GroupName == "Ground-Caiman-Convoy" then
-Debug("nisse - Recon_GroupStatusReport:Draw :: self: " .. DumpPretty(self))
-Debug("nisse - Recon_GroupStatusReport:Draw :: SS: " .. DCAF.StackTrace())
-end
     self:Erase(icon, vector, text)
     if self._isShredded then return end
 
@@ -489,7 +486,7 @@ function Recon_GroupStatusReport:AgeProcessBegin(recon)
         local timeRemaining = timeout - now
 -- Debug("nisse - Recon_GroupStatusReport:AgeProcessBegin_scheduler :: timeRemaining: " .. timeRemaining)
         if timeRemaining <= 0 then
-Debug("nisse - Recon_GroupStatusReport:AgeProcessBegin_scheduler :: ends ageing / removes drawings")
+-- Debug("nisse - Recon_GroupStatusReport:AgeProcessBegin_scheduler :: ends ageing / removes drawings")
             recon:RemoveReport(report)
             report:AgeProcessEnd(true)
             return
@@ -502,7 +499,7 @@ end
 
 function Recon_GroupStatusReport:AgeProcessEnd(shred)
     if not self._ageProcessCheduleID then
-Debug("nisse - Recon_GroupStatusReport:AgeProcessEnd :: no scheduler ID")
+-- Debug("nisse - Recon_GroupStatusReport:AgeProcessEnd :: no scheduler ID")
         return
     end
 -- Debug("nisse - Recon_GroupStatusReport:AgeProcessEnd :: ends ageing process")
@@ -526,10 +523,10 @@ function DCAF.Recon:ProcessDetected(contact)
     local group = contact.group
     local isAccepted, reason = self:_isContactAccepted(contact)
 -- if self.Group.GroupName == "Ground-Caiman-Convoy" then
-Debug("nisse - Recon:ProcessDetected :: group: " .. group.GroupName .. " :: self._reports: " .. DumpPretty(self._reports))
+-- Debug("nisse - Recon:ProcessDetected :: group: " .. group.GroupName .. " :: self._reports: " .. DumpPretty(self._reports))
 -- end
     if not isAccepted then
-Debug("nisse - Recon:ProcessDetected :: contact: " .. DumpPretty(contact) .. " :: was rejected :: reason: " .. Dump(reason))
+-- Debug("nisse - Recon:ProcessDetected :: contact: " .. DumpPretty(contact) .. " :: was rejected :: reason: " .. Dump(reason))
         return
     end
     local coalition = Coalition.Resolve(group)
@@ -539,7 +536,7 @@ Debug("nisse - Recon:ProcessDetected :: contact: " .. DumpPretty(contact) .. " :
     local now = UTILS.SecondsOfToday()
     local oldReport = self._reports[group.GroupName]
     if oldReport then
-Debug("nisse - Recon:ProcessDetected :: now: " .. now .. " :: group: " .. group.GroupName .. " :: oldReport: " .. DumpPretty(oldReport))
+-- Debug("nisse - Recon:ProcessDetected :: now: " .. now .. " :: group: " .. group.GroupName .. " :: oldReport: " .. DumpPretty(oldReport))
         if now < oldReport.TimeSeconds + oldReport.Lifespan then
             if isFunction(self._onRefineReport) then
                 self._onRefineReport(self, group, oldReport)
@@ -578,7 +575,7 @@ function DCAF.Recon:SubmitReport(report)
 end
 
 function DCAF.Recon:RemoveReport(report)
-Debug("nisse - DCAF.Recon:RemoveReport :: report: " .. DumpPretty(report) .. " :: SS: " .. DCAF:StackTrace())
+-- Debug("nisse - DCAF.Recon:RemoveReport :: report: " .. DumpPretty(report) .. " :: SS: " .. DCAF.StackTrace())
     self._reports[report.GroupName] = nil
     report:Erase(true, true, true)
     return self

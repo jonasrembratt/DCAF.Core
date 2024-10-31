@@ -13,17 +13,21 @@ function DCAF.Ambush:New(group, delayRevealed)
     ambush.Group:HandleEvent(EVENTS.ShootingStart, function(_, e)
         if e.IniGroup and e.IniGroup.GroupName ~= ambush.Group.GroupName then return end
         ambush.Group:UnHandleEvent(EVENTS.ShootingStart)
-        ambush:OnRevealed(delayRevealed)
+        ambush:Reveal(delayRevealed)
     end)
     return ambush
+end
+
+function DCAF.Ambush:Reveal(delay)
+    return self:OnRevealed(delay)
 end
 
 function DCAF.Ambush:OnRevealed(delay)
     if not isNumber(delay) then delay = 0 end
     DCAF.delay(function()
         self.Group:CommandSetInvisible(false)
-    end,
-    delay)
+    end, delay)
+    return self
 end
 
 local function setupMortal(ambush, retreatLocation, retreatOnRoads, speed)

@@ -45,7 +45,7 @@ local DCAF_ActiveGroundCrews = {
 local DCAF_CountActiveGroundCrews = 0
 
 local function stopMonitoringGroundCrew(leftAirplaneFunc)
-    if DCAF_CountActiveGroundCrews == 0 then 
+    if DCAF_CountActiveGroundCrews == 0 then
         Debug(DCAF.AircraftGroundAssets.ClassName .. " :: stops monitoring airplane taxi")
         DCAF.stopScheduler(DCAF.AircraftGroundAssets.MonitorTaxiScheduleID)
         DCAF.AircraftGroundAssets.MonitorTaxiScheduleID = nil
@@ -98,7 +98,7 @@ local function addAirplaneGroundCrew(unit)
     local info = DCAF_GroundCrewDB[typeName]
     if not info then
         Warning(DCAF.AircraftGroundAssets.ClassName .. " :: No ground crew information available for airplane type '" .. typeName .. "' :: IGNORES")
-        return 
+        return
     end
 
     local groundCrew = {}
@@ -145,7 +145,6 @@ function DCAF.AircraftGroundAssets.SpawnAirplaneGroundCrew(...)
     }
 
     MissionEvents:OnPlayerEnteredAirplane(function(event)
--- Debug("nisse - " .. DCAF.AircraftGroundAssets.ClassName .. "_OnPlayerEnteredAirplane :: player enters airplane: " .. Dump(event.IniUnit:GetPlayerName()))
         local unit = event.IniUnit
         if not unit:IsParked() then
             Debug(DCAF.AircraftGroundAssets.ClassName .. " :: player entered non-parked airplane :: EXITS")
@@ -153,7 +152,6 @@ function DCAF.AircraftGroundAssets.SpawnAirplaneGroundCrew(...)
         end
 
         Delay(1.5, function()
--- Debug("nisse - " .. DCAF.AircraftGroundAssets.ClassName .. "_OnPlayerEnteredAirplane :: delayed :: adds ground crew...")
             if DCAF_ActiveGroundCrew:FindForUnit(unit) then return end -- seems this callback is sometimes invoked multiple times; avoid creating multiple aircrews
             addAirplaneGroundCrew(unit)
         end)
@@ -196,19 +194,19 @@ function DCAF.AircraftGroundAssets.ActivateArmDearmAreaOfficer(groundCrew, zone)
         return Warning("DCAF.AircraftGroundAssets.Activate :: cannot get a coordinate from: " .. DumpPretty(groundCrew)) end
 
     MissionEvents:OnGroupEntersZone(nil, zone, function(event)
--- Debug("nisse - MissionEvents:OnGroupEntersZone :: group: " .. DumpPrettyDeep(event, 2))
+-- Debug("nisse - DCAF.AircraftGroundAssets.ActivateArmDearmAreaOfficer_OnGroupEntersZone :: group: " .. DumpPrettyDeep(event, 2))
         local group = event.IniGroups[1]
         if not group or not group:IsAir() then
             return end
 
         local aircraft = group:GetClosestUnit(coord)
         if not aircraft then
--- Debug("nisse - DCAF.AircraftGroundAssets.Activate :: zone triggered but could not resolve group's closest aircraft")            
+-- Debug("nisse - DCAF.AircraftGroundAssets.Activate :: zone triggered but could not resolve group's closest aircraft")
             return end
 
         if _activatingArmDearmAreaOfficer[aircraft.UnitName] then
             return end
-            
+
 -- MessageTo(nil, "Activated " .. aircraft.UnitName)
         _activatingArmDearmAreaOfficer[aircraft.UnitName] = true
         onUnitStopped(aircraft, function()
@@ -271,6 +269,12 @@ end
 function DCAF_ActiveGroundCrew:Destroy()
     for _, group in ipairs(self.GroundCrew) do
         group:Destroy()
+local nisse = _DATABASE.GROUPS[group.GroupName]
+if nisse then
+Debug("nisse - DCAF_ActiveGroundCrew:Destroy :: found in _DATABASE.GROUPS: " .. DumpPretty(nisse))
+_DATABASE.GROUPS[group.GroupName] = nil
+Debug("nisse - DCAF_ActiveGroundCrew:Destroy :: removed in _DATABASE.GROUPS")
+end
     end
     self:Deactivate()
     -- DCAF_ActiveGroundCrews[self.Unit.UnitName] = nil
