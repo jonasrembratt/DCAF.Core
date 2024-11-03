@@ -13259,7 +13259,7 @@ function DCAF.Lase:_endLase()
         self:_stop(self._source)
         return
     end
-    for i, unit in ipairs(self._source) do
+    for _, unit in ipairs(self._source:GetUnits()) do
         self:_stop(unit)
     end
 end
@@ -13312,14 +13312,16 @@ Debug("nisse - DCAF.Lase:_start :: strobe settings: " .. DumpPretty({
 end
 
 function DCAF.Lase:_stop(unit)
-    unit:LaseOff()
     if unit._dcafLaseBurschScheduleID then
         pcall(function()
+Debug("nisse - DCAF.Lase:_stop :: stops scheduler")
             local id = unit._dcafLaseBurschScheduleID
             unit._dcafLaseBurschScheduleID = nil
             DCAF.stopScheduler(id)
         end)
     end
+Debug("nisse - DCAF.Lase:_stop :: " .. unit.UnitName .. " :: laser OFF")
+    unit:LaseOff()
 end
 
 ---- SRS ----
