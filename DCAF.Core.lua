@@ -1303,17 +1303,14 @@ end
 --- Overrides MOOSE's default function to allow trimming seconds from result
 function UTILS.SecondsToClock(seconds, short, trimSeconds)
 
-    -- Nil check.
-    if seconds==nil then
-      return nil
-    end
-  
+    if seconds==nil then return nil end
+
     -- Seconds
     local seconds = tonumber(seconds)
-  
+
     -- Seconds of this day.
     local _seconds=seconds%(60*60*24)
-  
+
     if seconds<0 then
         return nil
     else
@@ -13157,6 +13154,172 @@ function DCAF.BlastDamage.Start(options)
     end
     DCAF.BlastDamage.WpnTracker:Start(DCAF.BlastDamage.UpdateInterval)
     Trace(DCAF.BlastDamage.ClassName .. " :: started :: options: " .. DumpPretty(DCAF.BlastDamage.Options))
+end
+
+---- IR STROBE ----
+
+DCAF.Lase = {
+    ClassName = "DCAF.Lase",
+    ----
+    Name = "",
+    IsActive = false
+}
+
+DCAF.StrobeProgram = {
+    ClassName = "DCAF.LaseStrobeProgram",
+    ---
+    Count = 1,                      -- no. of times in 'ON' state in each burst sequence
+    Duration = .5,                  -- time in 'ON' state
+    BurstInterval = .4,             -- time bewteen individual 'blinks' in a burst sequence
+    Interval = 2,                   -- time between burst sequences
+    RippleUnits = false             -- when true (and source is group), automatically increased no of 'blinks' in each burst sequence, just like with fighters
+}
+
+function DCAF.StrobeProgram:New(count, duration, burstInterval, sequenceInterval, rippleUnits)
+    local program = DCAF.clone(DCAF.StrobeProgram)
+    if not isNumber(count) then count = DCAF.StrobeProgram.Count end
+    if not isNumber(duration) then duration = DCAF.StrobeProgram.Duration end
+    if not isNumber(burstInterval) then burstInterval = DCAF.StrobeProgram.BurstInterval end
+    if not isNumber(sequenceInterval) then sequenceInterval = DCAF.StrobeProgram.Interval end
+    if not isBoolean(rippleUnits) then rippleUnits = DCAF.StrobeProgram.RippleUnits end
+    program.Count = count
+    program.BurstInterval = burstInterval
+    program.Interval = sequenceInterval
+    program.RippleUnits = rippleUnits
+    return program
+end
+
+function DCAF.Lase:New(source, code, strobeProgram)
+    local lase = DCAF.clone(DCAF.Lase)
+    if isClass(strobeProgram, DCAF.StrobeProgram) then
+        lase._strobeProgram = strobeProgram
+    end
+
+    if not isNumber(code) then code = 1688 end
+    lase._code = code
+    local unit = getUnit(source)
+    if unit then
+        lase._source = unit
+        lase.Name = unit.UnitName
+        return lase
+    end
+    local group = getGroup(source)
+    if not group then return Error("DCAF.IrStrobe:New :: `source` must be #UNIT or #GROUP, but was: " .. DumpPretty(source)) end
+    lase._source = group
+    lase._isGroup = true
+    lase.Name = group.GroupName
+    return lase
+end
+
+function DCAF.Lase:Start(target, duration, strobeProgram)
+    if not isClass(strobeProgram, DCAF.StrobeProgram) then strobeProgram = self._strobeProgram end
+    if self.IsActive then
+        self:_endLase()
+    end
+
+    local tgtUnit = getUnit(target)
+    if not tgtUnit then
+        local tgtGroup = getGroup(target)
+        if tgtGroup then
+            tgtUnit = tgtGroup:GetUnit(1)
+        end
+    end
+    if not tgtUnit then return Error("DCAF.Lase:Start :: cannot resolve unit: " .. DumpPretty(target), self) end
+    if not tgtUnit:IsActive() then return Error("DCAF.Lase:Start :: cannot lase inactive unit: " .. tgtUnit.UnitName)  end
+
+-- Debug("nisse - DCAF.Lase:Start :: ._isGroup: " .. Dump(self._isGroup))
+    if not self._isGroup then
+        self:_start(self._source, tgtUnit, 1, strobeProgram)
+    else
+        local units = self._source:GetUnits()
+        for index, unit in ipairs(units) do
+            self:_start(unit, tgtUnit, index, strobeProgram)
+        end
+    end
+    if isNumber(duration) then
+        DCAF.delay(function()
+            self:_endLase()
+        end, duration)
+    end
+    return self
+end
+
+function DCAF.Lase:StartStrobe(strobeProgram, duration)
+-- Debug("nisse - DCAF.Lase:StartStrobe :: duration: " .. Dump(duration) .. " :: strobeProgram: " .. DumpPretty(strobeProgram))
+    if not strobeProgram then strobeProgram = self._strobeProgram or DCAF.StrobeProgram end
+    return self:Start(self._source, duration, strobeProgram)
+end
+
+function DCAF.Lase:Stop()
+    self:_endLase()
+end
+
+function DCAF.Lase:_endLase()
+    if not self._isGroup then
+        self:_stop(self._source)
+        return
+    end
+    for i, unit in ipairs(self._source) do
+        self:_stop(unit)
+    end
+end
+
+function DCAF.Lase:_start(unit, target, unitIndex, strobeProgram)
+-- Debug("nisse - DCAF.Lase:_start :: unit: " .. unit.UnitName .. " :: target: " .. target.UnitName .. " :: unitIndex: " .. unitIndex)
+    local duration = Hours(99)
+    local bursts
+    local blinkInterval
+    local sequenceInterval
+-- Debug("nisse - DCAF.Lase:_start :: strobeProgram: " .. DumpPretty(strobeProgram))
+    if strobeProgram then
+        bursts = strobeProgram.Count
+        duration = strobeProgram.Duration
+        blinkInterval = strobeProgram.BurstInterval + duration
+        sequenceInterval = strobeProgram.Interval
+        if strobeProgram.RippleUnits then
+            bursts = bursts + (unitIndex-1)
+        end
+    end
+    if not bursts then
+        unit:LaseUnit(target, self._code, duration)
+        return
+    end
+
+    -- strobe...
+
+Debug("nisse - DCAF.Lase:_start :: strobe settings: " .. DumpPretty({
+    bursts = bursts,
+    blinkInterval = blinkInterval,
+    sequenceInterval = sequenceInterval,
+    duration = duration,
+    target = DumpPretty(target)
+}))
+    local function burstSequence(count)
+        unit:LaseUnit(target, self._code, duration)
+        for index = 2, count do
+-- Debug("nisse - DCAF.Lase:_start :: sequence :: index: " .. index .. " :: ._code: " .. Dump(self._code) .. " :: duration: " .. Dump(duration))
+            local delay = (duration + blinkInterval) * index
+            BASE:ScheduleOnce(delay, function()
+                unit:LaseUnit(target, self._code, duration)
+            end)
+        end
+    end
+
+    sequenceInterval = sequenceInterval + bursts * blinkInterval
+    unit._dcafLaseBurschScheduleID = DCAF.startScheduler(function()
+        burstSequence(bursts)
+    end, sequenceInterval)
+end
+
+function DCAF.Lase:_stop(unit)
+    unit:LaseOff()
+    if unit._dcafLaseBurschScheduleID then
+        pcall(function()
+            local id = unit._dcafLaseBurschScheduleID
+            unit._dcafLaseBurschScheduleID = nil
+            DCAF.stopScheduler(id)
+        end)
+    end
 end
 
 ---- SRS ----
