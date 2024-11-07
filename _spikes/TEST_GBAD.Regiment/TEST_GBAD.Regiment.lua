@@ -16,14 +16,14 @@ DCAF.GBAD.Regiment:New("TEST Regiment-2",
                         Coalition.Red,
                         ZONE:FindByName("TEST Regiment-2"),
                         "TEST Regiment HQ-2",
-                        DCAF.GBAD.RegimentMode.Static)
+                        DCAF.GBAD.RegimentMode.OFF)
                   :Debug(debug)
                   :Start()
 DCAF.GBAD.Regiment:New("TEST Regiment-3",
                         Coalition.Red,
                         ZONE:FindByName("TEST Regiment-3"),
                         "TEST Regiment HQ-3",
-                        DCAF.GBAD.RegimentMode.Static,
+                        DCAF.GBAD.RegimentMode.OFF,
                         nil,
                         "R-EWR")
                   :Debug(debug)

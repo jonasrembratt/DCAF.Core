@@ -16,9 +16,15 @@ DCAF.GBAD.RegimentMode = {
     OFF = "OFF"                     -- regiment groups will never spawn (useful mainly for testing)
 }
 
+--- Controls how a regiment despawns/spawns groups under its control
+DCAF.GBAD.RegimentDespawnMethod = {
+    Despawn = "Despawn",
+    Lobotomize = "Lobotomize"
+}
+
 local GBAD_REGIMENT_DEFAULTS = {
-    SAMPrefix = "RED SAM",
-    EWRPrefix = "RED EWR",
+    SAMPrefix = "SAM",
+    EWRPrefix = "EWR",
     PrebriefedPrefix = "-PB-",
     RegimentMode = DCAF.GBAD.RegimentMode.Dynamic,
     SpawnInterval = 4, -- seconds
@@ -28,6 +34,7 @@ local GBAD_REGIMENT_DEFAULTS = {
     MonitorDeactivationDistance = NauticalMiles(45),
     AutoDeactivation = false,
     UseEvasiveRelocation = true,
+    DespawnMethod = DCAF.GBAD.RegimentDespawnMethod.Despawn,  -- controls how a regiment despawns/spawns groups under its control
     MaxActiveSams = {
         Short = 1,
         Mid = 2,
@@ -50,7 +57,8 @@ DCAF.GBAD.Regiment = {
     CountActiveDynamic = 0,            -- #number - no. of currently active GBAD groups managed by the regiment
     MonitorActivationDistance = nil,      -- when enemy air groups gets inside this distance the regiment activates (spawns all inactive groups)
     MonitorPostActivationDistance = nil,  -- when Regiment is activated, individual GBAD groups gets activated as hostile air gets within this range
-    MonitorDeactivationDistance = nil     -- when no hostile air is found inside this distance the regiment deactivates (despawns all late activated groups)
+    MonitorDeactivationDistance = nil,    -- when no hostile air is found inside this distance the regiment deactivates (despawns all late activated groups)
+    DespawnMethod = GBAD_REGIMENT_DEFAULTS.DespawnMethod -- controls how the regiment despawns/spawns groups under its control
 }
 
 DCAF.GBAD.RegimentGroupDelegate = {
@@ -288,16 +296,16 @@ local GBAD_REGIMENT_UNIT_STATE = {
     DamageTime = nil,       -- #number Time when last damage was inflicted
 }
 
-function GBAD_REGIMENT_UNIT_STATE:New(unit, damage)
+function GBAD_REGIMENT_UNIT_STATE:New(unit, damage, time)
     local state = DCAF.clone(GBAD_REGIMENT_UNIT_STATE)
-    state:Update(unit, damage)
+    state:Update(unit, damage, time)
     return state
 end
 
-function GBAD_REGIMENT_UNIT_STATE:Update(unit, damage)
+function GBAD_REGIMENT_UNIT_STATE:Update(unit, damage, time)
     self.UnitName = unit.UnitName
     self.Damage = damage
-    self.DamageTime = UTILS.SecondsOfToday()
+    self.DamageTime = time or UTILS.SecondsOfToday()
 end
 
 local function getUnitKeyName(unit)
@@ -309,16 +317,17 @@ local function getUnitKeyName(unit)
     return string.sub(name, 1, idxSuffixStart-1) -- .. string.sub(name, idxSuffixStart + 5)
 end
 
-function GBAD_REGIMENT_GROUP_INFO:UpdateUnitDamage(unit, damage)
-    -- local temnplate = unit:GetTemplate()
-    local key = getUnitKeyName(unit) -- unit:GetNumber()
+function GBAD_REGIMENT_GROUP_INFO:UpdateUnitDamage(unit, damage, time, isPreDestroyed)
+    local key = getUnitKeyName(unit)
     local state = self.UnitStates[key]
     if not state then
-        self.UnitStates[key] = GBAD_REGIMENT_UNIT_STATE:New(unit, damage)
+        self.UnitStates[key] = GBAD_REGIMENT_UNIT_STATE:New(unit, damage, time)
     else
-        state:Update(unit, damage)
+        state:Update(unit, damage, time)
     end
     self.IsDamaged = true
+    self.IsPreDestroyed = isPreDestroyed
+    self.IsDestroyed = not DCAF.GBAD:QueryIsSAMFunctional(unit:GetGroup())
 end
 
 function GBAD_REGIMENT_GROUP_INFO:New(regiment, group, isInitialSpawn, isZoneLocked, category)
@@ -373,39 +382,51 @@ function GBAD_REGIMENT_GROUP_INFO:ScanAirborneUnits(range, coalition, breakOnFir
     return ScanAirborneUnits(self.Location, range, coalition, breakOnFirst, measureSlantRange, cacheTTL)
 end
 
-local function gbadRegiment_unitWasHit(unit, damage) -- note: Was can pass a damage. Mainly for simulation/debugging purposes
+local function gbadRegiment_unitWasHit(unit, damage, time, isPreDestroyed) -- note: Was can pass a damage. Mainly for simulation/debugging purposes
+Debug("nisse - gbadRegiment_unitWasHit :: unit: " .. unit.UnitName)
     damage = damage or unit:GetDamageRelative()
     if damage == 0 then
         return end
 
     local group = unit:GetGroup()
-    local key = group.GroupName
+    local key = GetGroupTemplateName(group) -- group:GetTemplate().GroupName OBSOLETE
     local info = GBAD_REGIMENT_GROUP_DB.GroupIndex[key]
     if not info then
         return Warning(DCAF.GBAD.Regiment.ClassName .. " :: no info found for regiment group: " .. group.GroupName) end
 
-    info:UpdateUnitDamage(unit, damage)
+    info:UpdateUnitDamage(unit, damage, time, isPreDestroyed)
+    if info.IsDestroyed then
+        -- TODO -- remove SAM group from IADS
+        Debug("GBAD_REGIMENT_GROUP_DB.Spawn :: group is destroyed (not included in IADS): " .. info.GroupName)
+    end
+    return info.Group
 end
 
-function DCAF.GBAD.Regiment.DebugSimulateHit(name, damage)
-    if not DCAF.Debug then
-        return end
-
--- DebugMessageTo(nil, "Simulates hit to: " .. name)
-    local unit = getUnit(name)
+function DCAF.GBAD.Regiment.SimulateHit(source, damage, time, isPreDestroyed)
+    local unit
+    if isUnit(source) then
+        unit = source
+    else
+        unit = getUnit(source)
+    end
     if unit then
-        gbadRegiment_unitWasHit(unit, damage)
+        gbadRegiment_unitWasHit(unit, damage, time, isPreDestroyed)
         return
     end
 
-    local group = getGroup(name)
+    local group
+    if isGroup(source) then
+        group = source
+    else
+        group = getGroup(source)
+    end
     if not group then
-        return Warning("DCAF.GBAD.Regiment:OnSimulateHit :: could not resolve group nor unit from: " .. DumpPretty(name)) end
+        return Warning("DCAF.GBAD.Regiment:OnSimulateHit :: could not resolve group nor unit from: " .. DumpPretty(source)) end
 
     for _, u in ipairs(group:GetUnits()) do
         damage = damage or u:GetDamageRelative()
         if damage > 0 then
-            gbadRegiment_unitWasHit(u, damage)
+            gbadRegiment_unitWasHit(u, damage, time, isPreDestroyed)
         end
     end
 end
@@ -436,6 +457,8 @@ end
 
 local function restoreDamageState(group, info, now)
 
+    if not info.IsDamaged then return end
+
     local function addStatics(statics)
         if not info.Statics then
             info.Statics = {}
@@ -445,15 +468,13 @@ local function restoreDamageState(group, info, now)
         end
     end
 
--- Debug("GBAD_REGIMENT_GROUP_DB.Spawn_restoreState :: info.GroupName: " .. info.GroupName .. "/" .. info.Group.GroupName .." :: info.UnitStates: " .. DumpPrettyDeep(info.UnitStates))
     now = now or UTILS.SecondsOfToday()
     for _, unit in ipairs(group:GetUnits()) do
         local key = getUnitKeyName(unit) -- unit:GetNumber()
--- Debug("GBAD_REGIMENT_GROUP_DB.Spawn_restoreState :: unit: " .. unit.UnitName .. " :: key: " .. key)
         local state = info.UnitStates[key]
--- Debug("GBAD_REGIMENT_GROUP_DB.Spawn_restoreState :: state: " .. DumpPretty(state))
-        if state and state.Damage >= 0 then
-            local statics = SubstituteWithStatic(unit, state.Damage, now - state.DamageTime)
+        if state and state.Damage > 0 then
+            local damageAge = now - state.DamageTime
+            local statics = SubstituteWithStatic(unit, state.Damage, damageAge)
             addStatics(statics)
         end
     end
@@ -463,7 +484,9 @@ end
 -- @param #DCAF.GBAD.Regiment regiment :: a regiment to manage the spawned group
 -- @param #string groupName :: the name of the group (template) to be spawned
 -- @param #number interval :: (optional; default = configured staggered spawn interval) specifies an interval to be used for staggered spawning
-function GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc, interval)
+-- @param #boolean lobotomize :: (optional; default = false) when set the spawned group will have its AI controller removed
+function GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc, interval, lobotomize)
+Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn :: info: " .. info.GroupName)
     local now = UTILS.SecondsOfToday()
     info.IsActive = true
     if info.IsDynamicSpawn then
@@ -471,11 +494,35 @@ function GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc, interval)
         regiment.IsCountActiveDynamicChanged = true
     end
     info.RefSpawnCount = info.RefSpawnCount + 1
+
+    local function initGroupDestruction()
+        if not regiment._destroyNamePattern or info._isDestroyInitialized then return end
+        info._isDestroyInitialized = true
+        local destroyAll = string.find(info.GroupName, regiment._destroyNamePattern)
+        local time = regiment._destroyTime
+
+        local function destroyUnit(unit)
+            if not destroyAll and not string.find(unit.UnitName, regiment._destroyNamePattern) then return end
+            DCAF.GBAD.Regiment.SimulateHit(unit, 1, time, true)
+        end
+
+        local units = info.Group:GetUnits()
+        for _, unit in ipairs(units) do
+            destroyUnit(unit)
+        end
+    end
+
     local function includeInIADS()
+        initGroupDestruction()
         if info.Category ~= GBAD_REGIMENT_GROUP_CATEGORY.SAM then
             return info.Group end
 
         -- hack - this seems to be necessary to get MANTIS to reliably pick up late activated groups...
+        if info.IsDestroyed then
+            Debug("GBAD_REGIMENT_GROUP_DB.Spawn :: group is destroyed (not included in IADS): " .. info.GroupName)
+            return info.Group
+        end
+        Debug("GBAD_REGIMENT_GROUP_DB.Spawn :: " .. regiment.Name .. " :: group is included in IADS: " .. info.GroupName)
         regiment._iads.SAM_Group:AddGroup(info.Group)
         if regiment.IsActive then
             regiment._iads:_RefreshSAMTable()
@@ -489,26 +536,37 @@ function GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc, interval)
     end
 
     local function spawnNow()
-        GBAD_REGIMENT_GROUP_DB.DespawnThreatRing(info)
+        if regiment.DespawnMethod ~= DCAF.GBAD.RegimentDespawnMethod.Lobotomize then
+            GBAD_REGIMENT_GROUP_DB.DespawnThreatRing(info)
+        end
 
         regiment.HQSkill = regiment.HQSkill or Skill.Validate(regiment.HQ:GetSkill())
         local skill = Skill.GetHarmonized(nil, regiment.HQSkill)
         if DCAF.GBAD.Debug and regiment.Debug then
             DebugMessageTo(nil, "Spawning Rgmt " .. regiment.Name .. "/" .. info.Spawn.SpawnTemplatePrefix .. " :: sets skill: " .. skill .. " :: HQ: " .. regiment.HQSkill)
         end
-        info.Spawn:InitSkill(skill)
-        info.Group = info.Spawn:Spawn()
+        if not info.Group then
+            info.Spawn:InitSkill(skill)
+            info.Spawn:InitKeepUnitNames(true)
+            info.Group = info.Spawn:Spawn()
+            includeInIADS()
+            if lobotomize then
+                info.Group:SetAIOff()
+            end
+        else
+            info.Group:SetAIOn()
+        end
 
 -- local duration = 30
 -- if interval <= 1 then
 -- duration = 1
 -- end
 -- DebugMessageTo(nil, "Regiment " .. regiment.Name .. " activates " .. info.GroupName, duration)
-Debug("GBAD_REGIMENT_GROUP_DB.Spawn_spawnNow :: group: " .. info.GroupName .. " :: skill: " .. skill)
-        if info.IsDynamicSpawn and info.IsDamaged then
+Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn_spawnNow :: group: " .. info.GroupName .. " :: skill: " .. skill .. " :: lobotomize: " .. Dump(lobotomize))
+-- Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn_spawnNow :: info: " .. DumpPretty(info))
+        if info.IsPreDestroyed or (not lobotomize and (info.IsDynamicSpawn and info.IsDamaged)) then
             restoreDamageState(info.Group, info, now)
         end
-        includeInIADS()
         if isFunction(onSpawnedFunc) then
             onSpawnedFunc(info)
         end
@@ -547,6 +605,7 @@ function GBAD_REGIMENT_GROUP_DB.Despawn(regiment, info, onBeforeDespawnFunc)
 
     info.IsActive = false
     local now = UTILS.SecondsOfToday()
+
     local function despawnNow()
         if isFunction(onBeforeDespawnFunc) and not onBeforeDespawnFunc(info) then
             -- group should no longer be despawned
@@ -566,11 +625,16 @@ function GBAD_REGIMENT_GROUP_DB.Despawn(regiment, info, onBeforeDespawnFunc)
 
 -- Debug("GBAD_REGIMENT_GROUP_DB.Despawn :: " .. info.GroupName .. " :: regiment.CountActiveDynamic: " .. regiment.CountActiveDynamic)
 
-        info.Group:Destroy()
-        destroyStatics()
-        if info.IsPreBriefed then
-            -- restore threat ring...
-            GBAD_REGIMENT_GROUP_DB.SpawnThreatRing(info)
+        if regiment.DespawnMethod == DCAF.GBAD.RegimentDespawnMethod.Despawn then
+            info.Group:Destroy()
+            info.Group = nil
+            destroyStatics()
+            if info.IsPreBriefed then
+                -- restore threat ring...
+                GBAD_REGIMENT_GROUP_DB.SpawnThreatRing(info)
+            end
+        else
+            info.Group:SetAIOff()
         end
     end
 
@@ -594,7 +658,7 @@ Debug("GBAD_REGIMENT_GROUP_DB.Despawn :: scheduled for despawn: " .. info.GroupN
 end
 
 function GBAD_REGIMENT_GROUP_DB.SpawnAllInitial(regiment, onSpawnedFunc)
-Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: mode: " .. regiment.Mode)
+-- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: mode: " .. regiment.Mode)
     local regimentIndex = GBAD_REGIMENT_GROUP_DB.RegimentIndex[regiment.Name]
     if not regimentIndex then
         return Error("GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: no regiment index found for regiment '" .. regiment.Name .. "'") end
@@ -608,8 +672,9 @@ Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: regiment: " .. regiment
     end
     for _, info in pairs(regimentIndex) do
 -- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: info: " .. DumpPretty(info))
-        if not info.IsDynamicSpawn then
-            GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc, interval)
+        if not info.IsDynamicSpawn or regiment.SpawnMethod == DCAF.GBAD.RegimentDespawnMethod.Lobotomize then
+            local lobotomize = info.IsDynamicSpawn
+            GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc, interval, lobotomize)
             table.insert(listSpawnedInfo, info)
         end
     end
@@ -1138,7 +1203,7 @@ local function gbadRegiment_filterAndIndexGroups(regiment, source, setZone, isIn
         return end
 
     local function indexIfIsInZones(group)
-Debug("nisse - indexIfIsInZones :: group: " .. group.GroupName)
+-- Debug("nisse - indexIfIsInZones :: group: " .. group.GroupName)
         local coord = group:GetCoordinate()
         if not coord then
             -- group was despawned by a different regiment
@@ -1169,7 +1234,6 @@ Debug("nisse - indexIfIsInZones :: group: " .. group.GroupName)
 end
 
 function DCAF.GBAD.Regiment:New(name, coalition, zones, hq, mode, sams, ewrs, awacs)
-
     if DCAF.Debug then
         if not isAssignedString(name) then
             return Error("DCAF.GBAD.Regiment:New :: `name` must be assigned string, but was: " .. DumpPretty(name)) end
@@ -1235,7 +1299,7 @@ function DCAF.GBAD.Regiment:New(name, coalition, zones, hq, mode, sams, ewrs, aw
     end
     local isStaticMode = regiment.Mode == DCAF.GBAD.RegimentMode.Static
     gbadRegiment_filterAndIndexGroups(regiment, regiment.HQ, nil, true, GBAD_REGIMENT_GROUP_CATEGORY.HQ)
-    gbadRegiment_filterAndIndexGroups(regiment, set_ewrs, nil --[[set_zone]], true, GBAD_REGIMENT_GROUP_CATEGORY.EWR)
+    -- gbadRegiment_filterAndIndexGroups(regiment, set_ewrs, nil --[[set_zone]], true, GBAD_REGIMENT_GROUP_CATEGORY.EWR)
     gbadRegiment_filterAndIndexGroups(regiment, set_sams, set_zone, isStaticMode, GBAD_REGIMENT_GROUP_CATEGORY.SAM)
     gbadRegiment_filterAndIndexGroups(regiment, nil, regiment.AWACS, isStaticMode, GBAD_REGIMENT_GROUP_CATEGORY.AWACS)
     regiment._set_ewrs = set_ewrs
@@ -1247,6 +1311,23 @@ end
 local function gbadRegimentHasCustomSpawnDelegates(regiment)
 
     return regiment._customGroupSpawn
+end
+
+--- Destroys all controlled groups and/or units that matches a specified naming pattern (default: "DESTROYED")
+-- @paramm #string namePattern - Pattern to look for when destroying units/groups
+-- @paramm #numberg time - Specifies time (seonds since midnight) for when units was destroyed. If vale is negative then time will be calculated as 'now' - time
+function DCAF.GBAD.Regiment:DestroyUnits(namePattern, time)
+    if not isNumber(time) then
+        time = UTILS.SecondsOfToday()
+    elseif time < 0 then
+        time = UTILS.SecondsOfToday() + time
+    end
+    local clockTime = UTILS.SecondsToClock(time)
+    Debug("DCAF.GBAD.Regiment:DestroyUnits :: " .. self.Name .. " :: namePattern: " .. Dump(namePattern) .. " :: time: " .. Dump(clockTime))
+    if not isAssignedString(namePattern) then namePattern = "DESTROYED" end
+    self._destroyNamePattern = namePattern
+    self._destroyTime = time
+    return self
 end
 
 --- Registers customized group delegate to control group spawn and despawn behavior. 
@@ -1609,15 +1690,21 @@ local function hackMantisIADS(regiment, iads)
           local height = _data[4]
           local blind = _data[5] * 1.25 + 1
           local samgroup = GROUP:FindByName(name)
+-- Debug("nisse - iads:_CheckLoop :: name: " .. name .. " :: radius: " .. radius .. " :: height: " .. height)
           local IsInZone, Distance, coord = self:_CheckObjectInZone(detset, samcoordinate, radius, height, dlink) -- //hacked// -- also receives target coordinate
+-- Debug("nisse - iads:_CheckLoop :: IsInZone: " .. Dump(IsInZone))
           local tgtRelativeAltitude                     -- //hacked//
           if coord then                                 -- //hacked//
-                tgtRelativeAltitude = coord.y - samcoordinate.y
+            tgtRelativeAltitude = coord.y - samcoordinate.y
           end
           local suppressed = self.SuppressedGroups[name] or false
           local activeshorad = self.Shorad.ActiveGroups[name] or false
           local groupName = GetGroupOrUnitName(name)    -- //hacked//
           local info = regimentIndex[groupName]         -- //hacked//
+-- nisse
+-- if not info then
+--     Debug("nisse - hackMantisIADS__CheckLoop :: info not found: " .. groupName)
+-- end
           info.IsActiveShorad = activeshorad            -- //hacked//
           local delegate = info.Delegate                -- //hacked//
 
@@ -1659,6 +1746,7 @@ local function hackMantisIADS(regiment, iads)
           end
 
           if IsInZone and not suppressed and not activeshorad then --check any target in zone and not currently managed by SEAD
+-- Debug("nisse - iads:_CheckLoop :: samgroup:IsAlive(): " .. Dump(samgroup:IsAlive()))
             if samgroup:IsAlive() and shouldActivate() then -- //hacked//
               -- switch on SAM
               local switch = false
@@ -1729,6 +1817,7 @@ local function hackMantisIADS(regiment, iads)
             -- DEBUG
             set = self:_PreFilterHeight(height)
         end
+-- Debug("nisse - iads:_CheckObjectInZone :: set: " .. DumpPretty(set))
         for _,_coord in pairs (set) do
             local coord = _coord  -- get current coord to check
             -- output for cross-check
@@ -1760,6 +1849,41 @@ local function hackMantisIADS(regiment, iads)
         end
         return false, 0
     end
+
+    function iads:StartIntelDetection()
+        self:T(self.lid.."Starting Intel Detection")
+        -- DEBUG
+        -- start detection
+        local groupset = self.EWR_Group -- //hacked// -- seems MANTIS should use the correct set of EWR when running in advanced (corrects problem with not detecting contacts from EWR)
+        if self.advanced then           -- //hacked//
+          groupset = self.Adv_EWR_Group -- //hacked//
+        else                            -- //hacked//
+          groupset = self.EWR_Group     -- //hacked//
+        end                             -- //hacked//
+        local samset = self.SAM_Group
+        
+        self.intelset = {}
+        
+        local IntelOne = INTEL:New(groupset,self.Coalition,self.name.." IntelOne")
+        --IntelOne:SetClusterAnalysis(true,true)
+        --IntelOne:SetClusterRadius(5000)
+        IntelOne:Start()
+        
+        local IntelTwo = INTEL:New(samset,self.Coalition,self.name.." IntelTwo")
+        --IntelTwo:SetClusterAnalysis(true,true)
+        --IntelTwo:SetClusterRadius(5000)
+        IntelTwo:Start()
+        
+        local IntelDlink = INTEL_DLINK:New({IntelOne,IntelTwo},self.name.." DLINK",22,300)
+        IntelDlink:__Start(1)
+        
+        self:SetUsingDLink(IntelDlink)
+        
+        table.insert(self.intelset, IntelOne)
+        table.insert(self.intelset, IntelTwo)
+        
+        return IntelDlink
+      end
 
     -- --- this hack makes it possible to not pass an Accept zone, just a reject zone...
     -- function iads:_CheckCoordinateInZones(coord)
@@ -1859,7 +1983,7 @@ local function hackMantisIADS(regiment, iads)
                                 grp:EnableEmission(false)
                             end
                             grp:OptionAlarmStateGreen() -- needed else we cannot move around
-Debug("nisse - GBAD.Regiment/onafterManageEvasion/SuppressionStart :: .UseEvasiveRelocation: " .. DumpPretty(self.UseEvasiveRelocation))
+-- Debug("nisse - GBAD.Regiment/onafterManageEvasion/SuppressionStart :: .UseEvasiveRelocation: " .. DumpPretty(self.UseEvasiveRelocation))
                             if regiment.UseEvasiveRelocation then  -- //hacked//
                                 grp:RelocateGroundRandomInRadius(20,300,false,false,"Diamond",true)
                             end
@@ -1893,7 +2017,7 @@ Debug("nisse - GBAD.Regiment/onafterManageEvasion/SuppressionStart :: .UseEvasiv
                         local SuppressionStartTime = timer.getTime() + delay
                         local SuppressionEndTime = timer.getTime() + delay + _tti + self.Padding + delay
                         local _targetgroupname = _targetgroup:GetName()
-Debug("nisse - GBAD.Regiment/onafterManageEvasion :: .SuppressedGroups: " .. DumpPretty(self.SuppressedGroups))                 
+-- Debug("nisse - GBAD.Regiment/onafterManageEvasion :: .SuppressedGroups: " .. DumpPretty(self.SuppressedGroups))                 
                         if not self.SuppressedGroups[_targetgroupname] then
                             self:T(string.format("*** SEAD - %s | Parameters TTI %ds | Switch-Off in %ds",_targetgroupname,_tti,delay))
                             timer.scheduleFunction(SuppressionStart,{_targetgroup,_targetgroupname, SEADGroup},SuppressionStartTime)
@@ -1996,7 +2120,7 @@ Debug("nisse - GBAD.Regiment/onafterManageEvasion :: .SuppressedGroups: " .. Dum
           end
 
         return self
-      end
+    end
 end
 
 function DCAF.GBAD.Regiment:Start()
@@ -2013,9 +2137,10 @@ function DCAF.GBAD.Regiment:Start()
     iads.SAM_Group = self._set_sams
 
     local function includeSpawnedInitialInIADS(info)
-        if info.Category == GBAD_REGIMENT_GROUP_CATEGORY.EWR then
-            iads.EWR_Group:AddGroup(info.Group)
-        elseif info.Category == GBAD_REGIMENT_GROUP_CATEGORY.HQ then
+        -- if info.Category == GBAD_REGIMENT_GROUP_CATEGORY.EWR then
+        --     iads.EWR_Group:AddGroup(info.Group)
+        -- else
+        if info.Category == GBAD_REGIMENT_GROUP_CATEGORY.HQ then
             iads:SetCommandCenter(info.Group)
         end
     end
@@ -2037,7 +2162,6 @@ function DCAF.GBAD.Regiment:Start()
     end
     GBAD_REGIMENT_EWR:Harmonize(self)
     GBAD_REGIMENT_GROUP_DB.SpawnAllInitial(self, includeSpawnedInitialInIADS)
-    
     if not isStaticMode then
         -- spawn TELAR vehicles to create threat rings...
         if isAssignedString(GBAD_REGIMENT_DEFAULTS.PrebriefedPrefix) then
@@ -2059,9 +2183,8 @@ function DCAF.GBAD.Regiment:Activate(info, spawnDelegate)
 
     self.IsActive = true
     Debug("DCAF.GBAD.Regiment:Activate :: " .. self.Name)
-    self._iads.SAM_Group = SET_GROUP:New() -- self._sam_groups -- :FilterZones(self.Zones):FilterStart()
+    self._iads.SAM_Group = SET_GROUP:New()
     self._iads:SetAdvancedMode(true)
-    self._iads.Adv_EWR_Group = self._iads.EWR_Group
     self._iads:SetMaxActiveSAMs(
         self.MaxActiveSAMsShort or GBAD_REGIMENT_DEFAULTS.MaxActiveSams.Short,
         self.MaxActiveSAMsMid or GBAD_REGIMENT_DEFAULTS.MaxActiveSams.Mid,
@@ -2188,3 +2311,5 @@ end
 function DCAF.GBAD.Regiment:IsStarted()
     return self._iads ~= nil
 end
+
+Trace("\\\\\\\\\\ DCAF.GBAD.Regiment.lua was loaded //////////")

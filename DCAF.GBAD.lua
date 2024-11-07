@@ -160,25 +160,29 @@ DCAF_GBADDatabase = {
 }
 
 --- Returns a list of information blocks for a specified (GBAD) source (type name, GROUP, UNIT, or name of GROUP or UNIT)
-function DCAF_GBADDatabase:GetInfo(source)
+function DCAF_GBADDatabase:GetInfo(source, includeDeadUnits)
     local info
     if isAssignedString(source) then
         info = DCAF_GBADDatabase[source]
         if info then return { info } end
     end
+    if not isBoolean(includeDeadUnits) then includeDeadUnits = true end
     local unit = getUnit(source)
-    if unit then 
+    if unit then
+        if not includeDeadUnits and not unit:IsAlive() then return end
         info = DCAF_GBADDatabase[unit:GetTypeName()]
         if info then return { info } end
     end
 
     local group = getGroup(source)
     if group then
+Debug("nisse - DCAF_GBADDatabase:GetInfo :: group: " .. group.GroupName)
         local infos = {}
         local units = group:GetUnits()
         for _, unit in ipairs(units) do
--- Debug("nisse - DCAF_GBADDatabase:GetInfo :: unit type: " .. unit:GetTypeName())
+            if includeDeadUnits or unit:IsAlive() then return end
             info = DCAF_GBADDatabase[unit:GetTypeName()]
+Debug("nisse - DCAF_GBADDatabase:GetInfo :: unit type: " .. unit:GetTypeName() .. " :: info: " .. DumpPretty(info))
             if info then
                 infos[#infos+1] = info
             end
@@ -313,18 +317,32 @@ DCAF_GBADInfo:New("ZSU-23-4 Shilka", "Gun Dish"):InitTR():InitRange(NauticalMile
 -- ZSU-23-4 Shilka 
 DCAF_GBADInfo:New("SON_9", "Fire Can"):InitTR():InitRange(NauticalMiles(50), Feet(60000))
 
-function DCAF.GBAD:QueryIsSAM(source)
-    local infos = DCAF_GBADDatabase:GetInfo(source)
-    if not infos then return end
+local function dcafGbadQueryIsSAM(infos)
+end
+
+--- Returns true if source is a funcitonal SAM site (can track and shoot)
+function DCAF.GBAD:QueryIsSAM(source, includeDeadUnits)
+    local infos = DCAF_GBADDatabase:GetInfo(source, includeDeadUnits)
+    if not infos then
+Debug("nisse - DCAF.GBAD:QueryIsSAM :: no info: " .. source.GroupName)
+    return end
     local isLN, isTR
     for _, info in ipairs(infos) do
         isLN = isLN or info.IsLauncher
         isTR = isTR or info.IsTrackingRadar
         if isTR and isLN then
+Debug("nisse - DCAF.GBAD:QueryIsSAM :: is functional: " .. source.GroupName)
             return true
         end
     end
+Debug("nisse - DCAF.GBAD:QueryIsSAM :: is non-functional: " .. source.GroupName)
 end
+
+--- Returns true if source is a functional SAM site (can track and shoot). Dead units will not be considered
+function DCAF.GBAD:QueryIsSAMFunctional(source)
+    return self:QueryIsSAM(source, false)
+end
+
 
 --- Queries GBAD database to check for max range of a GBAD source
 -- @param #Any source - specifies the GBAD to be queried

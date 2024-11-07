@@ -10,15 +10,40 @@ DCAF.Story = {
     Name = nil,             -- #string - name of story
 }
 
+DCAF.StoryStartOutcome = {
+    ClassName = "DCAF.StoryStartOutcome",
+    ----
+}
+
+function DCAF.StoryStartOutcome:Delay(delay)
+    if not isNumber(delay) then return Error("DCAF.StoryStartOutcome:Delay :: `delay` must be number, but was: " .. DumpPretty(delay)) end
+    local outcome = DCAF.clone(DCAF.StoryStartOutcome)
+    outcome.DelayTime = delay
+    return outcome
+end
+
+function DCAF.StoryStartOutcome:PreventStart()
+    local outcome = DCAF.clone(DCAF.StoryStartOutcome)
+    outcome.IsPrevented = true
+    return outcome
+end
+
 setmetatable(DCAF.Story, {
     __tostring = function(story) return story.Name end
 })
 
---- Initializes a new, naned, story and returns it
-function DCAF.Story:New(name)
+--- Initializes a new, named, story and returns it
+function DCAF.Story:New(name, startDelayDefault)
     local story = DCAF.clone(DCAF.Story)
     DCAF_Story_ID = DCAF_Story_ID + 1
     story.ID = DCAF_Story_ID
+    if startDelayDefault ~= nil then
+        if not isNumber(startDelayDefault) or startDelayDefault < 0 then
+            Error("DCAF.Story:New :: `startDelayDefault` must be positive number, but was: " .. DumpPretty(startDelayDefault) .. " :: IGNORES value")
+        end
+        story.StartDelayDefault = startDelayDefault
+    end
+    Debug("DCAF.Story:New :: name: " .. Dump(name) .. " :: startDelayDefault: " .. Dump(startDelayDefault))
     if isAssignedString(name) then
         local existing = DCAF_Stories[name]
         if existing then
@@ -32,47 +57,139 @@ function DCAF.Story:New(name)
     return story
 end
 
---- Starts the story. This function will invoke any internal function registered with :OnStart (if any), or it will simply mark the story as started, and then invoke the :OnStarted function
-function DCAF.Story:Start()
+function DCAF.Story:_start(delay)
     if self._isStarted then return self end
-    if self._startFunc then
+
+    local function doStart()
+Debug("nisse - DCAF.Story:Start :: ._startFunc: " .. Dump(self._startFunc))
+        if not self._startFunc then
+            self._isStarted = true
+            return self:OnStarted()
+        end
         local args = {}
         if self._startFuncArg then
             args = self._startFuncArg
         end
         table.insert(args, 1, self)
-        local started = self._startFunc(unpack(args))
-        if started then
-           self._isStarted = true
+        local outcome = self._startFunc(unpack(args))
+        if isClass(outcome, DCAF.StoryStartOutcome) then
+            if outcome.IsPrevented then return self end
+            local delay = 0
+            if outcome.DelayTime then
+                delay = outcome.DelayTime
+            end
+            DCAF.delay(function()
+                self._isStarted = true
+                self:OnStarted()
+            end, delay)
+            return
+        else
+            self._isStarted = true
             self:OnStarted()
         end
-        return started
     end
-    self._isStarted = true
-    self:OnStarted()
+
+    if not isNumber(delay) then delay = self.StartDelayDefault end
+    if delay then
+        DCAF.delay(doStart, delay)
+    else
+        doStart()
+    end
     return self
 end
 
---- Marks the story as having ended
-function DCAF.Story:End()
+function DCAF.Story:_end(delay)
     if self._isEnded then return self end
-    self._isEnded = true
+    local function doEnd()
+Debug("nisse - DCAF.Story:End :: delay: " .. Dump(delay))
+        if not self._endFunc then
+            self._isEnded = true
+            return self:OnEnded() 
+        end
+        local args = {}
+        if self._endFuncArg then
+            args = self._endFuncArg
+        end
+        table.insert(args, 1, self)
+        local outcome = self._endFunc(unpack(args))
+        if isClass(outcome, DCAF.StoryStartOutcome) then
+            if outcome.IsPrevented then return self end
+            local delay = 0
+            if outcome.DelayTime then
+                delay = outcome.DelayTime
+            end
+            DCAF.delay(function()
+                self._isEnded = true
+                self:OnEnded()
+            end, delay)
+        else
+            self._isEnded = true
+            self:OnEnded()
+        end
+    end
+
+    if not isNumber(delay) then delay = self.EndDelayDefault end
+    if delay then
+        DCAF.delay(doEnd, delay)
+    else
+        doEnd()
+    end
     return self
+end
+
+--- Starts the story. This function will invoke any internal function registered with :OnStart (if any), or it will simply mark the story as started, and then invoke the :OnStarted function
+function DCAF.Story:Start()
+    return self:_start()
+end
+
+--- Starts the story after a delay. This function will invoke any internal function registered with :OnStart (if any), or it will simply mark the story as started, and then invoke the :OnStarted function
+function DCAF.Story:StartDelayed(delay)
+    if not isNumber(delay) or delay <= 0 then return Error("DCAF.Story:StartDelayed :: `delay` must be positive number, but was: " .. DumpPretty(delay)) end
+    return self:_start(delay)
+end
+
+--- Ends the story
+function DCAF.Story:End()
+    return self:_end(0)
+end
+
+--- Ends the story after a delay
+function DCAF.Story:EndDelayed(delay)
+    if not isNumber(delay) or delay <= 0 then return Error("DCAF.Story:EndDelayed :: `delay` must be positive number, but was: " .. DumpPretty(delay)) end
+    return self:_end(delay)
 end
 
 --- Registers a function to be used when the story is to start. This function will be invoked internally by the :Start function
 function DCAF.Story:OnStart(func, ...)
+Debug("nisse - DCAF.Story:OnStart :: func: " .. DumpPretty(func))
     if not isFunction(func) then
         Error("DCAF.Story:OnStart :: `func` must be function, but was: " .. DumpPretty(func))
         return self
     end
     self._startFunc = func
     self._startFuncArg = arg
+Debug("nisse - DCAF.Story:OnStart :: ._startFunc: " .. DumpPretty(self._startFunc))
     return self
 end
 
---- Will be incoked internally when the story starts
+--- Will be invoked internally when the story starts
 function DCAF.Story:OnStarted()
+end
+
+--- Registers a function to be used when the story is end. This function will be invoked internally by the :End function
+function DCAF.Story:OnEnd(func, ...)
+Debug("nisse - DCAF.Story:OnEnd :: func: " .. DumpPretty(func))
+    if not isFunction(func) then
+        Error("DCAF.Story:OnEnd :: `func` must be function, but was: " .. DumpPretty(func))
+        return self
+    end
+    self._endFunc = func
+    self._endFuncArg = arg
+Debug("nisse - DCAF.Story:OnEnd :: ._endFunc: " .. DumpPretty(self._endFunc))
+    return self
+end
+
+function DCAF.Story:OnEnded()
 end
 
 --- Gets a value that indicates whether the story has started
@@ -80,6 +197,11 @@ function DCAF.Story:IsStarted() return self._isStarted end
 
 --- Gets a value that indicates whether the story has ended
 function DCAF.Story:IsEnded() return self._isEnded end
+
+--- Gets a value that indicates whether the story has startedm but not ended
+function DCAF.Story:IsActive()
+    return self._isStarted and not self._isEnded
+end
 
 --- Activates groups in a staggered fashion (applying a delay between each activation)
 -- @param #table groups - a table where all values are #GROUP objects
@@ -91,8 +213,6 @@ function DCAF.Story:ActivateStaggered(groups, interval, order, onActivatedFunc, 
     activateGroupsStaggered(groups, interval, onActivatedFunc, delay, order)
     return self
 end
-
-
 
 DCAF.StoryStarter = {
     ClassName = "DCAF.StoryStarter",
