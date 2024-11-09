@@ -39,6 +39,12 @@ local GBAD_REGIMENT_DEFAULTS = {
         Short = 1,
         Mid = 2,
         Long = 2,
+    },
+    ExcludeDestroyedSAMDelay = {
+        [Skill.Excellent] = VariableValue:New(30, .1),
+        [Skill.High] = VariableValue:New(Minutes(5), .3),
+        [Skill.Good] = VariableValue:New(Minutes(10), .5),
+        [Skill.Average] = VariableValue:New(Minutes(20), .5),
     }
 }
 
@@ -58,7 +64,8 @@ DCAF.GBAD.Regiment = {
     MonitorActivationDistance = nil,      -- when enemy air groups gets inside this distance the regiment activates (spawns all inactive groups)
     MonitorPostActivationDistance = nil,  -- when Regiment is activated, individual GBAD groups gets activated as hostile air gets within this range
     MonitorDeactivationDistance = nil,    -- when no hostile air is found inside this distance the regiment deactivates (despawns all late activated groups)
-    DespawnMethod = GBAD_REGIMENT_DEFAULTS.DespawnMethod -- controls how the regiment despawns/spawns groups under its control
+    DespawnMethod = GBAD_REGIMENT_DEFAULTS.DespawnMethod,-- controls how the regiment despawns/spawns groups under its control
+    ExcludeDestroyedSAMDelay = GBAD_REGIMENT_DEFAULTS.ExcludeDestroyedSAMDelay -- time before an HQ excludes a SAM site that has been rendered useless
 }
 
 DCAF.GBAD.RegimentGroupDelegate = {
@@ -125,11 +132,15 @@ local GBAD_REGIMENT_GBAD_PROPERTIES = {
     -- }
 }
 
-local GBAD_REGIMENT_GROUP_DB = {
-    IsMonitoringDamage = nil,          -- see GBAD_REGIMENT_GROUP_DB:BeginMonitorDamage()
+local GBAD_REGIMENT_DB = {
+    IsMonitoringDamage = nil,          -- see GBAD_REGIMENT_DB:BeginMonitorDamage()
     GroupIndex = {
         -- key   = group name
         -- value = #GBAD_REGIMENT_GROUP_INFO
+    },
+    Regiments = {
+        -- key   = regiment name
+        -- value = #DCAF.GBAD.Regiment
     },
     RegimentIndex = {
         -- key   = regiment name
@@ -175,7 +186,7 @@ function GBAD_REGIMENT_GBAD_PROPERTIES:New(typeName, role, tier, mobile)
     if not isAssignedString(typeName) then
         error("GBAD_REGIMENT_GBAD_PROPERTIES:New :: `typeName` must be assigned string, but was: " .. DumpPretty(typeName)) end
 
-    if GBAD_REGIMENT_GROUP_DB.TypeProperties[typeName] then
+    if GBAD_REGIMENT_DB.TypeProperties[typeName] then
         error("GBAD_REGIMENT_GBAD_PROPERTIES:New :: `typeName` was already added to GBAD database") end
 
     local p = DCAF.clone(GBAD_REGIMENT_GBAD_PROPERTIES)
@@ -187,7 +198,7 @@ function GBAD_REGIMENT_GBAD_PROPERTIES:New(typeName, role, tier, mobile)
     if isBoolean(mobile) then
         p:Mobile(mobile)
     end
-    GBAD_REGIMENT_GROUP_DB.TypeProperties[typeName] = p
+    GBAD_REGIMENT_DB.TypeProperties[typeName] = p
     return p
 end
 
@@ -223,7 +234,7 @@ function GBAD_REGIMENT_GBAD_PROPERTIES:NATO(ident, name)
         error("GBAD_REGIMENT_GBAD_PROPERTIES:New :: `ident` must be assigned string, but was: " .. DumpPretty(ident)) end
 
     self.Attributes[DCAF.GBAD.Attribute.NATO] = ident
-    GBAD_REGIMENT_GROUP_DB.TypeProperties[ident] = self
+    GBAD_REGIMENT_DB.TypeProperties[ident] = self
     self:NATOName(name)
     return self
 end
@@ -233,7 +244,7 @@ function GBAD_REGIMENT_GBAD_PROPERTIES:NATOName(value)
         error("GBAD_REGIMENT_GBAD_PROPERTIES:New :: `value` must be assigned string, but was: " .. DumpPretty(value)) end
 
     self.Attributes[DCAF.GBAD.Attribute.NATOName] = value
-    GBAD_REGIMENT_GROUP_DB.TypeProperties[value] = self
+    GBAD_REGIMENT_DB.TypeProperties[value] = self
     return self
 end
 
@@ -275,7 +286,7 @@ GBAD_REGIMENT_GBAD_PROPERTIES:New("Strela-10M3", GBAD_REGIMENT_GROUP_CATEGORY.SH
 --     local props = DCAF.clone(GBAD_REGIMENT_GBAD_PROPERTIES)
 --     props.TypeName = typeName
 --     props.SuppressionTime = suppressionTime
---     GBAD_REGIMENT_GROUP_DB.TypeProperties[typeName] = props
+--     GBAD_REGIMENT_DB.TypeProperties[typeName] = props
 --     return props
 -- end
 
@@ -332,12 +343,12 @@ end
 
 function GBAD_REGIMENT_GROUP_INFO:New(regiment, group, isInitialSpawn, isZoneLocked, category)
     local key = group.GroupName
-    local regimentIndex = GBAD_REGIMENT_GROUP_DB.RegimentIndex[regiment.Name]
+    local regimentIndex = GBAD_REGIMENT_DB.RegimentIndex[regiment.Name]
     if not regimentIndex then
         regimentIndex = {}
-        GBAD_REGIMENT_GROUP_DB.RegimentIndex[regiment.Name] = regimentIndex
+        GBAD_REGIMENT_DB.RegimentIndex[regiment.Name] = regimentIndex
     end
-    local info = GBAD_REGIMENT_GROUP_DB.GroupIndex[key]
+    local info = GBAD_REGIMENT_DB.GroupIndex[key]
     if info then
         -- group was already indexed (by a different GBAD regiment)
 Debug("nisse -- group was already indexed (by a different GBAD regiment): " .. group.GroupName)
@@ -359,7 +370,7 @@ Debug("nisse -- group was already indexed (by a different GBAD regiment): " .. g
     info.Spawn = getSpawn(group.GroupName)
     info.Spawn:InitKeepUnitNames()
     info.TypeName = group:GetTypeName()
-    info.Properties = GBAD_REGIMENT_GROUP_DB.TypeProperties[info.TypeName]
+    info.Properties = GBAD_REGIMENT_DB.TypeProperties[info.TypeName]
     info.GroupName = group.GroupName
     info.IsPreBriefed = string.find(info.GroupName, GBAD_REGIMENT_DEFAULTS.PrebriefedPrefix)
     info.Location = DCAF.Location:NewNamed(group.GroupName, group:GetCoordinate())
@@ -368,7 +379,7 @@ Debug("nisse -- group was already indexed (by a different GBAD regiment): " .. g
     info.RefSpawnCount = 0 -- increases/decreases as regiments spawn/destroy group (some groups can be referenced by multiple GBAD regiments)
     info.RefCount = 1      -- no. of GBAD regiments managing the group
     info.IsZoneLocked = isZoneLocked -- when true; the group will be used to monitor the GBAD regiment activation tripwire
-    GBAD_REGIMENT_GROUP_DB.GroupIndex[key] = info
+    GBAD_REGIMENT_DB.GroupIndex[key] = info
     regimentIndex[key] = info
     if group:IsActive() then
         -- group wasn't Late Activated...
@@ -383,26 +394,29 @@ function GBAD_REGIMENT_GROUP_INFO:ScanAirborneUnits(range, coalition, breakOnFir
 end
 
 local function gbadRegiment_unitWasHit(unit, damage, time, isPreDestroyed) -- note: Was can pass a damage. Mainly for simulation/debugging purposes
+if unit then
 Debug("nisse - gbadRegiment_unitWasHit :: unit: " .. unit.UnitName)
+unit:Explode(500) -- nisse
+end
     damage = damage or unit:GetDamageRelative()
+    time = time or UTILS.SecondsOfToday()
     if damage == 0 then
         return end
 
     local group = unit:GetGroup()
     local key = GetGroupTemplateName(group) -- group:GetTemplate().GroupName OBSOLETE
-    local info = GBAD_REGIMENT_GROUP_DB.GroupIndex[key]
+    local info = GBAD_REGIMENT_DB.GroupIndex[key]
     if not info then
         return Warning(DCAF.GBAD.Regiment.ClassName .. " :: no info found for regiment group: " .. group.GroupName) end
 
     info:UpdateUnitDamage(unit, damage, time, isPreDestroyed)
-    if info.IsDestroyed then
-        -- TODO -- remove SAM group from IADS
-        Debug("GBAD_REGIMENT_GROUP_DB.Spawn :: group is destroyed (not included in IADS): " .. info.GroupName)
-    end
+    local group = unit:GetGroup()
+    GBAD_REGIMENT_DB._notifyUnitHit(group, info, damage, time)
     return info.Group
 end
 
 function DCAF.GBAD.Regiment.SimulateHit(source, damage, time, isPreDestroyed)
+    Debug("DCAF.GBAD.Regiment.SimulateHit :: source: " .. DumpPretty(source) .. " :: damage: " .. Dump(damage) .. " :: time: " .. Dump(time) .. " :: isPreDestroyed: " .. Dump(isPreDestroyed))
     local unit
     if isUnit(source) then
         unit = source
@@ -421,7 +435,7 @@ function DCAF.GBAD.Regiment.SimulateHit(source, damage, time, isPreDestroyed)
         group = getGroup(source)
     end
     if not group then
-        return Warning("DCAF.GBAD.Regiment:OnSimulateHit :: could not resolve group nor unit from: " .. DumpPretty(source)) end
+        return Warning("DCAF.GBAD.Regiment:SimulateHit :: could not resolve group nor unit from: " .. DumpPretty(source)) end
 
     for _, u in ipairs(group:GetUnits()) do
         damage = damage or u:GetDamageRelative()
@@ -431,27 +445,45 @@ function DCAF.GBAD.Regiment.SimulateHit(source, damage, time, isPreDestroyed)
     end
 end
 
-function GBAD_REGIMENT_GROUP_DB.GetSystemTypeName(system)
-    local typeProperties = GBAD_REGIMENT_GROUP_DB.TypeProperties[system]
+function GBAD_REGIMENT_DB.GetSystemTypeName(system)
+    local typeProperties = GBAD_REGIMENT_DB.TypeProperties[system]
     if typeProperties then
         return typeProperties.TypeName
     end
-    for _, tp in pairs(GBAD_REGIMENT_GROUP_DB.TypeProperties) do
+    for _, tp in pairs(GBAD_REGIMENT_DB.TypeProperties) do
         if tp.Attributes[DCAF.GBAD.Attribute.NATO] == system or tp.Attributes[DCAF.GBAD.Attribute.NATOName] == system then
             return tp.TypeName
         end
     end
 end
 
-function GBAD_REGIMENT_GROUP_DB.BeginMonitorDamage()
-    if GBAD_REGIMENT_GROUP_DB.IsMonitoringDamage then
+function GBAD_REGIMENT_DB.GetRegiment(name)
+    return GBAD_REGIMENT_DB.Regiments[name]
+end
+
+--- Notifies all regimentrs a GBAD group has been nit
+function GBAD_REGIMENT_DB._notifyUnitHit(group, info, damage, time)
+Debug("nisse - GBAD_REGIMENT_DB._notifyUnitHit :: info: " .. DumpPretty(info))
+    local regimentIndexes = GBAD_REGIMENT_DB.RegimentIndex
+    if not regimentIndexes then return end
+    local key = info.GroupName
+    for regimentName, regimentIndex in pairs(regimentIndexes) do
+        if regimentIndex[key] then
+            local regiment = GBAD_REGIMENT_DB.GetRegiment(regimentName)
+            if regiment then regiment:_notifyUnitHit(group, info, damage, time) end
+        end
+    end
+end
+
+function GBAD_REGIMENT_DB.BeginMonitorDamage()
+    if GBAD_REGIMENT_DB.IsMonitoringDamage then
         return end
 
     MissionEvents:OnUnitHit(function(event)
-        if not event.IniUnit then
+        if not event.TgtUnit then
             return end
 
-        gbadRegiment_unitWasHit(event.IniUnit)
+        gbadRegiment_unitWasHit(event.TgtUnit)
     end)
 end
 
@@ -485,8 +517,8 @@ end
 -- @param #string groupName :: the name of the group (template) to be spawned
 -- @param #number interval :: (optional; default = configured staggered spawn interval) specifies an interval to be used for staggered spawning
 -- @param #boolean lobotomize :: (optional; default = false) when set the spawned group will have its AI controller removed
-function GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc, interval, lobotomize)
-Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn :: info: " .. info.GroupName)
+function GBAD_REGIMENT_DB.Spawn(regiment, info, onSpawnedFunc, interval, lobotomize)
+Debug("nisse - GBAD_REGIMENT_DB.Spawn :: info: " .. info.GroupName)
     local now = UTILS.SecondsOfToday()
     info.IsActive = true
     if info.IsDynamicSpawn then
@@ -519,10 +551,10 @@ Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn :: info: " .. info.GroupName)
 
         -- hack - this seems to be necessary to get MANTIS to reliably pick up late activated groups...
         if info.IsDestroyed then
-            Debug("GBAD_REGIMENT_GROUP_DB.Spawn :: group is destroyed (not included in IADS): " .. info.GroupName)
+            Debug("GBAD_REGIMENT_DB.Spawn :: group is destroyed (not included in IADS): " .. info.GroupName)
             return info.Group
         end
-        Debug("GBAD_REGIMENT_GROUP_DB.Spawn :: " .. regiment.Name .. " :: group is included in IADS: " .. info.GroupName)
+        Debug("GBAD_REGIMENT_DB.Spawn :: " .. regiment.Name .. " :: group is included in IADS: " .. info.GroupName)
         regiment._iads.SAM_Group:AddGroup(info.Group)
         if regiment.IsActive then
             regiment._iads:_RefreshSAMTable()
@@ -537,7 +569,7 @@ Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn :: info: " .. info.GroupName)
 
     local function spawnNow()
         if regiment.DespawnMethod ~= DCAF.GBAD.RegimentDespawnMethod.Lobotomize then
-            GBAD_REGIMENT_GROUP_DB.DespawnThreatRing(info)
+            GBAD_REGIMENT_DB.DespawnThreatRing(info)
         end
 
         regiment.HQSkill = regiment.HQSkill or Skill.Validate(regiment.HQ:GetSkill())
@@ -562,8 +594,8 @@ Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn :: info: " .. info.GroupName)
 -- duration = 1
 -- end
 -- DebugMessageTo(nil, "Regiment " .. regiment.Name .. " activates " .. info.GroupName, duration)
-Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn_spawnNow :: group: " .. info.GroupName .. " :: skill: " .. skill .. " :: lobotomize: " .. Dump(lobotomize))
--- Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn_spawnNow :: info: " .. DumpPretty(info))
+Debug("nisse - GBAD_REGIMENT_DB.Spawn_spawnNow :: group: " .. info.GroupName .. " :: skill: " .. skill .. " :: lobotomize: " .. Dump(lobotomize))
+-- Debug("nisse - GBAD_REGIMENT_DB.Spawn_spawnNow :: info: " .. DumpPretty(info))
         if info.IsPreDestroyed or (not lobotomize and (info.IsDynamicSpawn and info.IsDamaged)) then
             restoreDamageState(info.Group, info, now)
         end
@@ -573,24 +605,24 @@ Debug("nisse - GBAD_REGIMENT_GROUP_DB.Spawn_spawnNow :: group: " .. info.GroupNa
     end
 
     interval = interval or regiment.SpawnInterval or GBAD_REGIMENT_DEFAULTS.SpawnInterval
-    if GBAD_REGIMENT_GROUP_DB._nextSpawn == nil or interval == 0 or GBAD_REGIMENT_GROUP_DB._nextSpawn + interval*2 < now then
-        GBAD_REGIMENT_GROUP_DB._nextSpawn = now
+    if GBAD_REGIMENT_DB._nextSpawn == nil or interval == 0 or GBAD_REGIMENT_DB._nextSpawn + interval*2 < now then
+        GBAD_REGIMENT_DB._nextSpawn = now
     end
 
-    if now < GBAD_REGIMENT_GROUP_DB._nextSpawn then
-        local delay = GBAD_REGIMENT_GROUP_DB._nextSpawn - now
+    if now < GBAD_REGIMENT_DB._nextSpawn then
+        local delay = GBAD_REGIMENT_DB._nextSpawn - now
         DCAF.delay(function()
             spawnNow()
         end, delay)
     else
         spawnNow()
     end
-    GBAD_REGIMENT_GROUP_DB.BeginMonitorDamage()
-    GBAD_REGIMENT_GROUP_DB._nextSpawn = GBAD_REGIMENT_GROUP_DB._nextSpawn + GBAD_REGIMENT_DEFAULTS.SpawnInterval
+    GBAD_REGIMENT_DB.BeginMonitorDamage()
+    GBAD_REGIMENT_DB._nextSpawn = GBAD_REGIMENT_DB._nextSpawn + GBAD_REGIMENT_DEFAULTS.SpawnInterval
     return info
 end
 
-function GBAD_REGIMENT_GROUP_DB.Despawn(regiment, info, onBeforeDespawnFunc)
+function GBAD_REGIMENT_DB.Despawn(regiment, info, onBeforeDespawnFunc)
     if not info.IsDynamicDespawn or not info.IsActive then
         return info end
 
@@ -623,7 +655,7 @@ function GBAD_REGIMENT_GROUP_DB.Despawn(regiment, info, onBeforeDespawnFunc)
             -- other regiments are still managing this group
             return end
 
--- Debug("GBAD_REGIMENT_GROUP_DB.Despawn :: " .. info.GroupName .. " :: regiment.CountActiveDynamic: " .. regiment.CountActiveDynamic)
+-- Debug("GBAD_REGIMENT_DB.Despawn :: " .. info.GroupName .. " :: regiment.CountActiveDynamic: " .. regiment.CountActiveDynamic)
 
         if regiment.DespawnMethod == DCAF.GBAD.RegimentDespawnMethod.Despawn then
             info.Group:Destroy()
@@ -631,7 +663,7 @@ function GBAD_REGIMENT_GROUP_DB.Despawn(regiment, info, onBeforeDespawnFunc)
             destroyStatics()
             if info.IsPreBriefed then
                 -- restore threat ring...
-                GBAD_REGIMENT_GROUP_DB.SpawnThreatRing(info)
+                GBAD_REGIMENT_DB.SpawnThreatRing(info)
             end
         else
             info.Group:SetAIOff()
@@ -639,13 +671,13 @@ function GBAD_REGIMENT_GROUP_DB.Despawn(regiment, info, onBeforeDespawnFunc)
     end
 
     local interval = GBAD_REGIMENT_DEFAULTS.DespawnInterval
-    if GBAD_REGIMENT_GROUP_DB._nextDespawn == nil or GBAD_REGIMENT_GROUP_DB._nextDespawn + interval*2 < now then
-        GBAD_REGIMENT_GROUP_DB._nextDespawn = now
+    if GBAD_REGIMENT_DB._nextDespawn == nil or GBAD_REGIMENT_DB._nextDespawn + interval*2 < now then
+        GBAD_REGIMENT_DB._nextDespawn = now
     end
 
-    if now < GBAD_REGIMENT_GROUP_DB._nextDespawn then
-        local delay = GBAD_REGIMENT_GROUP_DB._nextDespawn - now
-Debug("GBAD_REGIMENT_GROUP_DB.Despawn :: scheduled for despawn: " .. info.GroupName .. " :: delay: " .. delay)
+    if now < GBAD_REGIMENT_DB._nextDespawn then
+        local delay = GBAD_REGIMENT_DB._nextDespawn - now
+Debug("GBAD_REGIMENT_DB.Despawn :: scheduled for despawn: " .. info.GroupName .. " :: delay: " .. delay)
         info._isScheduledDespawn = true
         DCAF.delay(function()
             despawnNow()
@@ -653,15 +685,15 @@ Debug("GBAD_REGIMENT_GROUP_DB.Despawn :: scheduled for despawn: " .. info.GroupN
     else
         despawnNow()
     end
-    GBAD_REGIMENT_GROUP_DB._nextDespawn = GBAD_REGIMENT_GROUP_DB._nextDespawn + interval
+    GBAD_REGIMENT_DB._nextDespawn = GBAD_REGIMENT_DB._nextDespawn + interval
     return info
 end
 
-function GBAD_REGIMENT_GROUP_DB.SpawnAllInitial(regiment, onSpawnedFunc)
--- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: mode: " .. regiment.Mode)
-    local regimentIndex = GBAD_REGIMENT_GROUP_DB.RegimentIndex[regiment.Name]
+function GBAD_REGIMENT_DB.SpawnAllInitial(regiment, onSpawnedFunc)
+-- Debug("nisse - GBAD_REGIMENT_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: mode: " .. regiment.Mode)
+    local regimentIndex = GBAD_REGIMENT_DB.RegimentIndex[regiment.Name]
     if not regimentIndex then
-        return Error("GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: no regiment index found for regiment '" .. regiment.Name .. "'") end
+        return Error("GBAD_REGIMENT_DB.SpawnAllInitial :: no regiment index found for regiment '" .. regiment.Name .. "'") end
 
     local listSpawnedInfo = {}
     local interval
@@ -671,20 +703,20 @@ function GBAD_REGIMENT_GROUP_DB.SpawnAllInitial(regiment, onSpawnedFunc)
         interval = 0
     end
     for _, info in pairs(regimentIndex) do
--- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: info: " .. DumpPretty(info))
+-- Debug("nisse - GBAD_REGIMENT_DB.SpawnAllInitial :: regiment: " .. regiment.Name .. " :: info: " .. DumpPretty(info))
         if not info.IsDynamicSpawn or regiment.SpawnMethod == DCAF.GBAD.RegimentDespawnMethod.Lobotomize then
             local lobotomize = info.IsDynamicSpawn
-            GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc, interval, lobotomize)
+            GBAD_REGIMENT_DB.Spawn(regiment, info, onSpawnedFunc, interval, lobotomize)
             table.insert(listSpawnedInfo, info)
         end
     end
     return listSpawnedInfo
 end
 
-function GBAD_REGIMENT_GROUP_DB.GetAll(regiment, criteriaFunc)
-    local regimentIndex = GBAD_REGIMENT_GROUP_DB.RegimentIndex[regiment.Name]
+function GBAD_REGIMENT_DB.GetAll(regiment, criteriaFunc)
+    local regimentIndex = GBAD_REGIMENT_DB.RegimentIndex[regiment.Name]
     if not regimentIndex then
-        return Error("GBAD_REGIMENT_GROUP_DB.GetAll :: no regiment index found for regiment '" .. regiment.Name .. "'") end
+        return Error("GBAD_REGIMENT_DB.GetAll :: no regiment index found for regiment '" .. regiment.Name .. "'") end
 
     local result = {}
     for _, info in pairs(regimentIndex) do
@@ -695,25 +727,25 @@ function GBAD_REGIMENT_GROUP_DB.GetAll(regiment, criteriaFunc)
     return result
 end
 
--- function GBAD_REGIMENT_GROUP_DB.GetSpawnForType(typeName, countryID)
---     if not GBAD_REGIMENT_GROUP_DB.Templates then
---         GBAD_REGIMENT_GROUP_DB.Templates = {
+-- function GBAD_REGIMENT_DB.GetSpawnForType(typeName, countryID)
+--     if not GBAD_REGIMENT_DB.Templates then
+--         GBAD_REGIMENT_DB.Templates = {
 --             -- key   = type name
 --             -- value = #SPAWN
 --         }
 --     end
---     local spawn = GBAD_REGIMENT_GROUP_DB.Templates[typeName]
+--     local spawn = GBAD_REGIMENT_DB.Templates[typeName]
 --     if spawn then
 --         return spawn end
 
 --     local name = "GBAD_REGIMENT_" .. typeName
 --     local template = TEMPLATE.GetGround(typeName, name, countryID)
 --     spawn = SPAWN:NewFromTemplate(template, name)
---     GBAD_REGIMENT_GROUP_DB.Templates[typeName] = spawn
+--     GBAD_REGIMENT_DB.Templates[typeName] = spawn
 --     return spawn
 -- end
 
--- function GBAD_REGIMENT_GROUP_DB.SpawnThreatRing(info)
+-- function GBAD_REGIMENT_DB.SpawnThreatRing(info)
 --     if info._uncontrolledSpawn then
 --         info._tempLauncherGroup = info._uncontrolledSpawn:SpawnFromCoordinate(info._tempLauncherCoord)
 --         return
@@ -721,11 +753,11 @@ end
 
 --     local group = getGroup(info.GroupName)
 --     if not group then
---         return Warning("GBAD_REGIMENT_GROUP_DB.SpawnThreatRing :: cannot resolve group '" .. info.GroupName .. "' :: EXITS") end
+--         return Warning("GBAD_REGIMENT_DB.SpawnThreatRing :: cannot resolve group '" .. info.GroupName .. "' :: EXITS") end
 
 --     local function isTrackRadar(unit)
 --         local desc = unit:GetDCSObject():getDesc()
--- -- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnThreatRing :: desc: " .. DumpPrettyDeep(desc))
+-- -- Debug("nisse - GBAD_REGIMENT_DB.SpawnThreatRing :: desc: " .. DumpPrettyDeep(desc))
 --         return desc.attributes["SAM TR"] == true
 --     end
 
@@ -733,7 +765,7 @@ end
 --         if isTrackRadar(unit) then
 --             local coord = unit:GetCoordinate()
 --             if coord then
---                 info._uncontrolledSpawn = GBAD_REGIMENT_GROUP_DB.GetSpawnForType(unit:GetTypeName(), unit:GetCountry())
+--                 info._uncontrolledSpawn = GBAD_REGIMENT_DB.GetSpawnForType(unit:GetTypeName(), unit:GetCountry())
 --                 info._tempLauncherGroup = info._uncontrolledSpawn:SpawnFromCoordinate(coord)
 --                 info._tempLauncherCoord = coord
 --                 -- return
@@ -742,7 +774,7 @@ end
 --     end
 -- end
 
-function GBAD_REGIMENT_GROUP_DB.GetThreatRingSpawn(info)
+function GBAD_REGIMENT_DB.GetThreatRingSpawn(info)
 --     if info._threatRingSpawn then
 --         return info._threatRingSpawn end
 
@@ -755,7 +787,7 @@ function GBAD_REGIMENT_GROUP_DB.GetThreatRingSpawn(info)
 
 --     local function isLauncher(unit)
 --         local desc = unit:GetDCSObject():getDesc()
--- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnThreatRing :: desc: " .. DumpPrettyDeep(desc))
+-- Debug("nisse - GBAD_REGIMENT_DB.SpawnThreatRing :: desc: " .. DumpPrettyDeep(desc))
 --         if desc.attributes["SAM LA"] then
 --             return unit:GetTypeName()
 --         end
@@ -791,7 +823,7 @@ function GBAD_REGIMENT_GROUP_DB.GetThreatRingSpawn(info)
 --         if #reducedUnits < 2 then
 --             return end
 
--- Debug("nisse -  GBAD_REGIMENT_GROUP_DB.GetReducedSAMSpawn_createReducedSAMSiteSpawn :: reducedUnits: " .. DumpPrettyDeep(reducedUnits, 1))
+-- Debug("nisse -  GBAD_REGIMENT_DB.GetReducedSAMSpawn_createReducedSAMSiteSpawn :: reducedUnits: " .. DumpPrettyDeep(reducedUnits, 1))
 
 --         template.units = reducedUnits
 --         return template
@@ -800,7 +832,7 @@ function GBAD_REGIMENT_GROUP_DB.GetThreatRingSpawn(info)
 
     local template = info.Spawn:_GetTemplate(info.GroupName)
     if not template then
--- Debug("nisse - GBAD_REGIMENT_GROUP_DB.GetReducedSAMSpawn :: could not get template :: EXITS")
+-- Debug("nisse - GBAD_REGIMENT_DB.GetReducedSAMSpawn :: could not get template :: EXITS")
         return end
 
     template = DCAF.clone(template)
@@ -811,7 +843,7 @@ function GBAD_REGIMENT_GROUP_DB.GetThreatRingSpawn(info)
 
     local spawn = SPAWN:NewFromTemplate(template, "-TR-" .. info.GroupName)
     if not spawn then 
--- Debug("nisse - GBAD_REGIMENT_GROUP_DB.GetReducedSAMSpawn :: could not get spawn from template :: EXITS")
+-- Debug("nisse - GBAD_REGIMENT_DB.GetReducedSAMSpawn :: could not get spawn from template :: EXITS")
         return end
 
     -- spawn:InitUnControlled(true)
@@ -834,7 +866,7 @@ function GBAD_REGIMENT_GROUP_DB.GetThreatRingSpawn(info)
 
 --     local function isLauncher(unit)
 --         local desc = unit:GetDCSObject():getDesc()
--- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnThreatRing :: desc: " .. DumpPrettyDeep(desc))
+-- Debug("nisse - GBAD_REGIMENT_DB.SpawnThreatRing :: desc: " .. DumpPrettyDeep(desc))
 --         if desc.attributes["SAM LA"] then
 --             return unit:GetTypeName()
 --         end
@@ -859,14 +891,14 @@ function GBAD_REGIMENT_GROUP_DB.GetThreatRingSpawn(info)
 --         if #reducedUnits < 3 then
 --             return end
 
--- Debug("nisse -  GBAD_REGIMENT_GROUP_DB.GetReducedSAMSpawn_createReducedSAMSiteSpawn :: reducedUnits: " .. DumpPrettyDeep(reducedUnits, 1))
+-- Debug("nisse -  GBAD_REGIMENT_DB.GetReducedSAMSpawn_createReducedSAMSiteSpawn :: reducedUnits: " .. DumpPrettyDeep(reducedUnits, 1))
 
 --         local newTemplate = DCAF.clone(template)
 --         newTemplate.units = reducedUnits
 --         return SPAWN:NewFromTemplate(newTemplate, name)
 --     end
 
--- Debug("nisse -  GBAD_REGIMENT_GROUP_DB.GetReducedSAMSpawn :: template.units: " .. DumpPrettyDeep(template.units, 2))
+-- Debug("nisse -  GBAD_REGIMENT_DB.GetReducedSAMSpawn :: template.units: " .. DumpPrettyDeep(template.units, 2))
 
 --     -- remove all but one Search Radar (SR), Tracking Radar (TR), and one Launcher (LA)...
 --     for _, unit in ipairs(info.Group:GetUnits()) do
@@ -878,7 +910,7 @@ function GBAD_REGIMENT_GROUP_DB.GetThreatRingSpawn(info)
 --             typeLA = isLauncher(unit)
 --         else
 --             uncontrolledSpawn = createReducedSAMSiteSpawn()
---             GBAD_REGIMENT_GROUP_DB.UncontrolledSpawns[info.GroupName] = uncontrolledSpawn
+--             GBAD_REGIMENT_DB.UncontrolledSpawns[info.GroupName] = uncontrolledSpawn
 --             if uncontrolledSpawn then
 --                 SPAWN:InitUnControlled(true)
 --             end
@@ -898,7 +930,7 @@ end
 
 --     local function isLauncher(unit)
 --         local desc = unit:GetDCSObject():getDesc()
--- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnThreatRing :: desc: " .. DumpPrettyDeep(desc))
+-- Debug("nisse - GBAD_REGIMENT_DB.SpawnThreatRing :: desc: " .. DumpPrettyDeep(desc))
 --         if desc.attributes["SAM LA"] then
 --             return unit:GetTypeName()
 --         end
@@ -918,11 +950,11 @@ end
 --     return spawn
 -- end
 
-function GBAD_REGIMENT_GROUP_DB.SpawnThreatRing(info)
+function GBAD_REGIMENT_DB.SpawnThreatRing(info)
     if not info.IsPreBriefed then
         return end
 
-    local spawn = GBAD_REGIMENT_GROUP_DB.GetThreatRingSpawn(info)
+    local spawn = GBAD_REGIMENT_DB.GetThreatRingSpawn(info)
     if spawn then
         info._threatRingGroup = spawn:Spawn()
         info._threatRingGroup:SetAIOff()
@@ -933,27 +965,27 @@ function GBAD_REGIMENT_GROUP_DB.SpawnThreatRing(info)
     end
 end
 
-function GBAD_REGIMENT_GROUP_DB.DespawnThreatRing(info)
+function GBAD_REGIMENT_DB.DespawnThreatRing(info)
     if info._threatRingGroup then
         info._threatRingGroup:Destroy()
         info._threatRingGroup = nil
     end
 end
 
-function GBAD_REGIMENT_GROUP_DB.SpawnAllThreatRings(regiment)
+function GBAD_REGIMENT_DB.SpawnAllThreatRings(regiment)
     if not isAssignedString(GBAD_REGIMENT_DEFAULTS.PrebriefedPrefix) then
         return end
 
-    for _, info in ipairs(GBAD_REGIMENT_GROUP_DB.GetAllInactive(regiment)) do
--- Debug("nisse - GBAD_REGIMENT_GROUP_DB.SpawnAllThreatRings :: info.GroupName: " .. Dump(info.GroupName) .. " :: IsPreBriefed: " .. Dump(info.IsPreBriefed))
+    for _, info in ipairs(GBAD_REGIMENT_DB.GetAllInactive(regiment)) do
+-- Debug("nisse - GBAD_REGIMENT_DB.SpawnAllThreatRings :: info.GroupName: " .. Dump(info.GroupName) .. " :: IsPreBriefed: " .. Dump(info.IsPreBriefed))
         if info.IsPreBriefed then
-            GBAD_REGIMENT_GROUP_DB.SpawnThreatRing(info) -- ÅTERSTÄLL --
+            GBAD_REGIMENT_DB.SpawnThreatRing(info) -- ÅTERSTÄLL --
         end
     end
 end
 
-function GBAD_REGIMENT_GROUP_DB.GetAllActive(regiment, filterFunc)
-    return GBAD_REGIMENT_GROUP_DB.GetAll(regiment, function(info)
+function GBAD_REGIMENT_DB.GetAllActive(regiment, filterFunc)
+    return GBAD_REGIMENT_DB.GetAll(regiment, function(info)
         if not info.IsActive then
             return end
 
@@ -962,8 +994,8 @@ function GBAD_REGIMENT_GROUP_DB.GetAllActive(regiment, filterFunc)
     end)
 end
 
-function GBAD_REGIMENT_GROUP_DB.GetAllInactive(regiment, filterFunc)
-    return GBAD_REGIMENT_GROUP_DB.GetAll(regiment, function(info)
+function GBAD_REGIMENT_DB.GetAllInactive(regiment, filterFunc)
+    return GBAD_REGIMENT_DB.GetAll(regiment, function(info)
         if info.IsActive then
             return end
 
@@ -972,32 +1004,32 @@ function GBAD_REGIMENT_GROUP_DB.GetAllInactive(regiment, filterFunc)
     end)
 end
 
-function GBAD_REGIMENT_GROUP_DB.GetGBADProperties(group)
-    return GBAD_REGIMENT_GROUP_DB.TypeProperties[group:GetTypeName()]
+function GBAD_REGIMENT_DB.GetGBADProperties(group)
+    return GBAD_REGIMENT_DB.TypeProperties[group:GetTypeName()]
 end
 
-function GBAD_REGIMENT_GROUP_DB.GetGroupLocation(group)
-    local info = GBAD_REGIMENT_GROUP_DB.GroupIndex[group.GroupName]
+function GBAD_REGIMENT_DB.GetGroupLocation(group)
+    local info = GBAD_REGIMENT_DB.GroupIndex[group.GroupName]
     if info then
         return info.Location
     end
 end
 
-function GBAD_REGIMENT_GROUP_DB.DespawnAllForRegiment(regiment, filterFunc)
-    local regimentIndex = GBAD_REGIMENT_GROUP_DB.RegimentIndex[regiment.Name]
+function GBAD_REGIMENT_DB.DespawnAllForRegiment(regiment, filterFunc)
+    local regimentIndex = GBAD_REGIMENT_DB.RegimentIndex[regiment.Name]
     if not regimentIndex then
-        error("GBAD_REGIMENT_GROUP_DB.SpawnAllInitial :: no regiment index found for regiment '" .. regiment.Name .. "'") end
+        error("GBAD_REGIMENT_DB.SpawnAllInitial :: no regiment index found for regiment '" .. regiment.Name .. "'") end
 
     for _, info in pairs(regimentIndex) do
         if info.IsActive and (not isFunction(filterFunc) or filterFunc(info)) then
-            GBAD_REGIMENT_GROUP_DB.Despawn(regiment, info)
+            GBAD_REGIMENT_DB.Despawn(regiment, info)
         end
     end
 end
 
-function GBAD_REGIMENT_GROUP_DB.DestroyAllDynamic(regiment)
+function GBAD_REGIMENT_DB.DestroyAllDynamic(regiment)
     -- despawn all GROUPs that are not IsInitialSpawn
-    GBAD_REGIMENT_GROUP_DB.DespawnAllForRegiment(regiment, function(info)
+    GBAD_REGIMENT_DB.DespawnAllForRegiment(regiment, function(info)
         return info.IsDynamicSpawn
     end)
 end
@@ -1094,6 +1126,21 @@ function DCAF.GBAD.Regiment:InitMaxActiveSAMs(short, mid, long)
     return self
 end
 
+function DCAF.GBAD.Regiment:_notifyUnitHit(group, info, damage, time)
+    Debug("DCAF.GBAD.Regiment:_notifyUnitHit :: info: " .. DumpPretty(info) .. " :: damage: " .. Dump(damage) .. " :: time: " .. UTILS.SecondsToClock(time))
+    if info.IsDestroyed and not info._scheduledForExclusion then
+        info._scheduledForExclusion = self.ExcludeDestroyedSAMDelay[self.HQSkill]:GetValue()
+        local delay = info._scheduledForExclusion
+        DCAF.delay(function()
+            self._iads.SAM_Group:Remove(group.GroupName)
+            self._iads:_RefreshSAMTable()
+            Debug("DCAF.GBAD.Regiment:_notifyUnitHit :: destroyed group was excluded from IADS): " .. info.GroupName)
+        end, delay)
+        local minutes = UTILS.Round(delay / 60, 1)
+        Debug("DCAF.GBAD.Regiment:_notifyUnitHit :: group is destroyed: " .. info.GroupName .. " :: will be excluded in ~" .. minutes .. " min")
+    end
+end
+
 local function gbadRegimentSetZones(regiment, accept, reject, conflict)
     local function ensureList(source)
         if isList(source) then
@@ -1147,7 +1194,7 @@ function DCAF.GBAD.Regiment:InitZones(accept, reject, conflict)
 end
 
 local function gbadRegimentInitAfterStart(regiment)
-    local regimentIndex = GBAD_REGIMENT_GROUP_DB.RegimentIndex[regiment.Name]
+    local regimentIndex = GBAD_REGIMENT_DB.RegimentIndex[regiment.Name]
     if not regimentIndex then
         return end
 
@@ -1207,7 +1254,7 @@ local function gbadRegiment_filterAndIndexGroups(regiment, source, setZone, isIn
         local coord = group:GetCoordinate()
         if not coord then
             -- group was despawned by a different regiment
-            local location = GBAD_REGIMENT_GROUP_DB.GetGroupLocation(group)
+            local location = GBAD_REGIMENT_DB.GetGroupLocation(group)
             if not location then
                 Warning("gbadRegiment_filterAndIndexGroups :: cursed group: " .. group.GroupName .. " :: regiment: " .. regiment.Name)
                 return
@@ -1246,6 +1293,8 @@ function DCAF.GBAD.Regiment:New(name, coalition, zones, hq, mode, sams, ewrs, aw
         if awacs ~= nil and not isAssignedString(awacs) then
             return Error("DCAF.GBAD.Regiment:New :: `awacs` must be either a string or #SET_GROUP, but was: " .. DumpPretty(awacs)) end
     end
+
+    if GBAD_REGIMENT_DB.Regiments[name] then return Error("DCAF.GBAD.Regiment:New :: a GBAD regiment was alreacy created with same name: '" .. name .. "'") end
 
     local listZones
     if not isZone(zones) then
@@ -1304,7 +1353,7 @@ function DCAF.GBAD.Regiment:New(name, coalition, zones, hq, mode, sams, ewrs, aw
     gbadRegiment_filterAndIndexGroups(regiment, nil, regiment.AWACS, isStaticMode, GBAD_REGIMENT_GROUP_CATEGORY.AWACS)
     regiment._set_ewrs = set_ewrs
     regiment._set_sams = set_sams
-
+    GBAD_REGIMENT_DB.Regiments[name] = regiment
     return regiment
 end
 
@@ -1340,7 +1389,7 @@ function DCAF.GBAD.Regiment:InitGroupDelegate(groupName, delegate)
     if not isClass(delegate, DCAF.GBAD.RegimentGroupDelegate) then
         error("DCAF.GBAD.Regiment:InitGroupDelegate :: `delegate` must be #" .. DCAF.GBAD.RegimentGroupDelegate.ClassName .. ", but was: '" .. DumpPretty(delegate)) end
 
-    local info = GBAD_REGIMENT_GROUP_DB.GroupIndex[groupName]
+    local info = GBAD_REGIMENT_DB.GroupIndex[groupName]
     if not info then
         Warning("DCAF.GBAD.Regiment:InitGroupDelegate :: group '" .. groupName .. "' is not managed by regiment '" .. self.Name .. "'")
         return self
@@ -1375,9 +1424,9 @@ function DCAF.GBAD.Regiment:PreBriefed(key, value)
     if not isAssignedString(key) then
         error("DCAF.GBAD.Regiment:PreBriefed :: `key` must be assigned string, but was: " .. DumpPretty(key)) end
 
-    local regimentIndex = GBAD_REGIMENT_GROUP_DB.RegimentIndex[self.Name]
+    local regimentIndex = GBAD_REGIMENT_DB.RegimentIndex[self.Name]
 
-    local typeName = GBAD_REGIMENT_GROUP_DB.GetSystemTypeName(key)
+    local typeName = GBAD_REGIMENT_DB.GetSystemTypeName(key)
     if typeName then
         -- key is weapons system
         for _, info in pairs(regimentIndex) do
@@ -1519,7 +1568,7 @@ local function gbadRegiment_monitorActivationBegin(regiment)
     end
 
     regiment._monitorScheduleID = DCAF.startScheduler(function()
-        for _, info in pairs(GBAD_REGIMENT_GROUP_DB.GetAllInactive(regiment)) do
+        for _, info in pairs(GBAD_REGIMENT_DB.GetAllInactive(regiment)) do
             local spawnDelegate = isGroupDelegateSpawning(regiment, info)
             if (spawnDelegate and spawnDelegate.IncludeInIADS) or isHostileInRange(info) then
                 DCAF.stopScheduler(regiment._monitorScheduleID)
@@ -1572,7 +1621,7 @@ local function gbadRegiment_monitorPostActivationBegin(regiment, interval, infoL
                 if delegate then
                     onSpawnedFunc = delegate._onSpawnedFunc
                 end
-                GBAD_REGIMENT_GROUP_DB.Spawn(regiment, info, onSpawnedFunc)
+                GBAD_REGIMENT_DB.Spawn(regiment, info, onSpawnedFunc)
             end
         end
 
@@ -1599,7 +1648,7 @@ local function gbadRegiment_monitorPostActivationBegin(regiment, interval, infoL
                 onCheckDespawn = function(_info) return not isHostileInRange(_info) end
             end
             if onCheckDespawn and onCheckDespawn(info) then 
-                GBAD_REGIMENT_GROUP_DB.Despawn(regiment, info, onCheckDespawn)
+                GBAD_REGIMENT_DB.Despawn(regiment, info, onCheckDespawn)
             end
         end
 
@@ -1623,7 +1672,7 @@ local function gbadRegiment_monitorPostActivationBegin(regiment, interval, infoL
 --                         return not isHostileInRange(_info)
 --                     end
 --                 end
---                 GBAD_REGIMENT_GROUP_DB.Despawn(regiment, info, onCheckDespawnFunc)
+--                 GBAD_REGIMENT_DB.Despawn(regiment, info, onCheckDespawnFunc)
 --             end
 --         end
     end
@@ -1634,7 +1683,7 @@ local function gbadRegiment_monitorPostActivationBegin(regiment, interval, infoL
     end
 
     regiment._monitorScheduleID = DCAF.startScheduler(function()
-        infoList = infoList or GBAD_REGIMENT_GROUP_DB.GetAll(regiment)
+        infoList = infoList or GBAD_REGIMENT_DB.GetAll(regiment)
         for _, info in ipairs(infoList) do
             monitor(info)
         end
@@ -1679,7 +1728,7 @@ end
 local function hackMantisIADS(regiment, iads)
 
     function iads:_CheckLoop(samset,detset,dlink,limit)
-        local regimentIndex = GBAD_REGIMENT_GROUP_DB.RegimentIndex[regiment.Name] -- //hacked//
+        local regimentIndex = GBAD_REGIMENT_DB.RegimentIndex[regiment.Name] -- //hacked//
 
         self:T(self.lid .. "CheckLoop " .. #detset .. " Coordinates")
         local switchedon = 0
@@ -2161,11 +2210,11 @@ function DCAF.GBAD.Regiment:Start()
         self:Activate()
     end
     GBAD_REGIMENT_EWR:Harmonize(self)
-    GBAD_REGIMENT_GROUP_DB.SpawnAllInitial(self, includeSpawnedInitialInIADS)
+    GBAD_REGIMENT_DB.SpawnAllInitial(self, includeSpawnedInitialInIADS)
     if not isStaticMode then
         -- spawn TELAR vehicles to create threat rings...
         if isAssignedString(GBAD_REGIMENT_DEFAULTS.PrebriefedPrefix) then
-            GBAD_REGIMENT_GROUP_DB.SpawnAllThreatRings(self)
+            GBAD_REGIMENT_DB.SpawnAllThreatRings(self)
         end
         gbadRegiment_monitorActivationBegin(self)
     end
@@ -2215,7 +2264,7 @@ function DCAF.GBAD.Regiment:Activate(info, spawnDelegate)
             onSpawnedFunc = spawnDelegate._onSpawnedFunc
         end
         if info then
-            GBAD_REGIMENT_GROUP_DB.Spawn(self, info, onSpawnedFunc)
+            GBAD_REGIMENT_DB.Spawn(self, info, onSpawnedFunc)
         end
         gbadRegiment_monitorPostActivationBegin(self)
     end
@@ -2239,7 +2288,7 @@ function DCAF.GBAD.Regiment:Deactivate(monitorForReactivation)
     self._iads:Debug(false)
     self._iads:Stop(1)
     self._iads.EWR_Group:FilterStop()
-    GBAD_REGIMENT_GROUP_DB.DestroyAllDynamic(self)
+    GBAD_REGIMENT_DB.DestroyAllDynamic(self)
     if not monitorForReactivation then
         return end
 
@@ -2266,7 +2315,7 @@ function DCAF.GBAD.Regiment:OnFullyActive()
                 DebugMessageTo(nil, message, 30)
             end
             -- special case: Even static regiments can have delegate-controlled GBAD groups...
-            local delegateControlled = GBAD_REGIMENT_GROUP_DB.GetAllActive(self, function (info)   return info.Delegate   end)
+            local delegateControlled = GBAD_REGIMENT_DB.GetAllActive(self, function (info)   return info.Delegate   end)
 -- Debug("GBAD.Regiment:OnFullyActive :: delegateControlled: " .. DumpPrettyDeep(delegateControlled, 2))
             if #delegateControlled > 0 then
                 gbadRegiment_monitorPostActivationBegin(self, 30, delegateControlled)
@@ -2287,11 +2336,11 @@ function DCAF.GBAD.Regiment:Stop(delay, sleep)
     if not self:IsStarted() then
         return
     end
-    GBAD_REGIMENT_GROUP_DB.DespawnAllForRegiment(self)
+    GBAD_REGIMENT_DB.DespawnAllForRegiment(self)
     self._iads:Stop(delay or 1)
     self._iads = nil
     if sleep == true then
-        local infoList = GBAD_REGIMENT_GROUP_DB.GetAll(self)
+        local infoList = GBAD_REGIMENT_DB.GetAll(self)
 
         local function putToSleep(group)
             if not group or not group:IsActive() or not group:IsAlive() then

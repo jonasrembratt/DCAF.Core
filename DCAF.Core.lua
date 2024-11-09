@@ -269,6 +269,7 @@ function getTableType(table)
             return "list"
         end
     end
+    return "list"
 end
 
 function isList( value )
@@ -2049,12 +2050,10 @@ function activateGroupsStaggered(groups, interval, onActivatedFunc, delay, order
 end
 
 function VariableValue:New(value, variance)
-    if not isNumber(value) then
-        error("VariableValue:New :: `value` must be a number but was " .. type(value)) end
+    if not isNumber(value) then return Error("VariableValue:New :: `value` must be a number but was " .. type(value)) end
 
     if isNumber(variance) then
-        if variance < 0 then
-            error("VariableValue:New :: `variance` must be a positive number, but was " .. Dump(variance)) end
+        if variance < 0 then return Error("VariableValue:New :: `variance` must be a positive number, but was " .. Dump(variance)) end
     else
         variance = 0
     end
@@ -2108,10 +2107,11 @@ function VariableValue:GetValue(variance)
         return math.random(minValue, maxValue )
     end
 
+    if not isNumber(variance) then variance = self.Variance end
     if self.MinValue then
         return getBoundedValue()
     end
-    return getValue(self.Value, variance or self.Variance)
+    return getValue(self.Value, variance)
 end
 
 RoundMethod = {
@@ -4330,11 +4330,19 @@ end
 function SetFlag( name, value, menuKey )
     value = value or true
     trigger.action.setUserFlag(name, value)
-    Trace("SetFlag-"..name.." :: "..tostring(value))
+    Trace("SetFlag :: "..name.." :: " .. DumpPretty(value))
 end
 
 function GetFlag( name )
     return trigger.misc.getUserFlag( name )
+end
+
+function IncreaseFlag( name, increment )
+    if not isNumber(increment) then increment = 1 end
+    local value = GetFlag(name)
+    value = (value or 0) + increment
+    trigger.action.setUserFlag(name, value)
+    Trace("IncrementFlag :: '"..name.."' :: value: ".. value)
 end
 
 function GetGroupTemplateName(group)
@@ -4487,15 +4495,34 @@ function GetRTBAirbaseFromRoute(group)
 end
 
 function GetUnitFromGroupName( groupName, unitNumber )
-
     unitNumber = unitNumber or 1
     local group = GROUP:FindByName( groupName )
     if (group == nil) then return nil end
     return group.GetUnit( unitNumber )
+end
 
-  end
+--- Resolves a location's coordinates and then removes the location (if #GROUP, #UNIT, or #STATIC)
+-- @param Any location - any valid source for a location (see DCAF.Location.Resolve)
+-- @param bool destroySource - (optional, default=false) When set, the operation removed the source after resolving coordinate (if #GROUP, #UNIT, or #STATIC)
+function GetCoordinate(location, destroySource)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return Error("GetCoordinateThenDestroy :: cound not resolve `source`: " .. DumpPretty(location)) end
+    local coordinate = validLocation:GetCoordinate()
+    if not destroySource then return coordinate end
+    local source = validLocation.Source
+    if isGroup(source) or isUnit(source) or isStatic(source) then
+        source:Destroy()
+    end
+    return coordinate
+end
 
-  function EstimatedDistance( feet )
+--- Resolves a location's coordinates and then removes the location (if #GROUP, #UNIT, or #STATIC)
+-- @param Any location - any valid source for a location (see DCAF.Location.Resolve)
+function GetCoordinateThenDestroy(location)
+    return GetCoordinate(location, true)
+end
+
+function EstimatedDistance( feet )
     if (not isNumber(feet)) then error( "<feet> must be a number" ) end
 
     local f = nil
@@ -6158,7 +6185,7 @@ function _e:onEvent( event )
 
     local function addInitiatorAndTarget( event )
         if event.initiator then
-            if not event.IniUnit then
+            if event.initiator and not event.IniUnit then
                 event.IniUnit = UNIT:Find(event.initiator)
             end
             if event.IniUnit then
@@ -13306,17 +13333,17 @@ Debug("nisse - DCAF.Lase:_start :: strobe settings: " .. DumpPretty({
     end
 
     sequenceInterval = sequenceInterval + bursts * blinkInterval
-    unit._dcafLaseBurschScheduleID = DCAF.startScheduler(function()
+    unit._dcafLaseBurstScheduleID = DCAF.startScheduler(function()
         burstSequence(bursts)
     end, sequenceInterval)
 end
 
 function DCAF.Lase:_stop(unit)
-    if unit._dcafLaseBurschScheduleID then
+    if unit._dcafLaseBurstScheduleID then
         pcall(function()
 Debug("nisse - DCAF.Lase:_stop :: stops scheduler")
-            local id = unit._dcafLaseBurschScheduleID
-            unit._dcafLaseBurschScheduleID = nil
+            local id = unit._dcafLaseBurstScheduleID
+            unit._dcafLaseBurstScheduleID = nil
             DCAF.stopScheduler(id)
         end)
     end
