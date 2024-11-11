@@ -176,14 +176,13 @@ function DCAF_GBADDatabase:GetInfo(source, includeDeadUnits)
 
     local group = getGroup(source)
     if group then
-Debug("nisse - DCAF_GBADDatabase:GetInfo :: group: " .. group.GroupName)
         local infos = {}
         local units = group:GetUnits()
         for _, unit in ipairs(units) do
             if includeDeadUnits or unit:IsAlive() then return end
             info = DCAF_GBADDatabase[unit:GetTypeName()]
-Debug("nisse - DCAF_GBADDatabase:GetInfo :: unit type: " .. unit:GetTypeName() .. " :: info: " .. DumpPretty(info))
             if info then
+-- Debug("nisse - DCAF_GBADDatabase:GetInfo :: unit type: " .. unit:GetTypeName() .. " :: info: " .. DumpPretty(info))
                 infos[#infos+1] = info
             end
         end
@@ -324,18 +323,18 @@ end
 function DCAF.GBAD:QueryIsSAM(source, includeDeadUnits)
     local infos = DCAF_GBADDatabase:GetInfo(source, includeDeadUnits)
     if not infos then
-Debug("nisse - DCAF.GBAD:QueryIsSAM :: no info: " .. source.GroupName)
+-- Debug("nisse - DCAF.GBAD:QueryIsSAM :: no info: " .. source.GroupName)
     return end
     local isLN, isTR
     for _, info in ipairs(infos) do
         isLN = isLN or info.IsLauncher
         isTR = isTR or info.IsTrackingRadar
         if isTR and isLN then
-Debug("nisse - DCAF.GBAD:QueryIsSAM :: is functional: " .. source.GroupName)
+-- Debug("nisse - DCAF.GBAD:QueryIsSAM :: is functional: " .. source.GroupName)
             return true
         end
     end
-Debug("nisse - DCAF.GBAD:QueryIsSAM :: is non-functional: " .. source.GroupName)
+-- Debug("nisse - DCAF.GBAD:QueryIsSAM :: is non-functional: " .. source.GroupName)
 end
 
 --- Returns true if source is a functional SAM site (can track and shoot). Dead units will not be considered
@@ -351,6 +350,7 @@ function DCAF.GBAD:QueryRange(source)
     local infos = DCAF_GBADDatabase:GetInfo(source)
     local maxLateral = 0
     local maxVertical = 0
+    if not infos then return maxLateral, maxVertical end
     for _, info in ipairs(infos) do
         if info.RangeLateral and info.RangeLateral > maxLateral then maxLateral = info.RangeLateral end
         if info.RangeVertical and info.RangeVertical > maxVertical then maxVertical = info.RangeVertical end
@@ -365,7 +365,7 @@ end
 local TracePrefix = "BadLand :: "             -- used for traces
 
 local function teardownMantisIADS(area, force)
-Debug("nisse - teardownMantisIADS :: area.IADS: " .. DumpPretty(area.IADS))
+-- Debug("nisse - teardownMantisIADS :: area.IADS: " .. DumpPretty(area.IADS))
     if not area.IADS then
         return end
     
@@ -465,7 +465,7 @@ function mantis_hackSuppression(iads)
     function iads.mysead:onafterManageEvasion(From,Event,To,_targetskill,_targetgroup,SEADPlanePos,SEADWeaponName,SEADGroup,timeoffset)
         -- local targetProperties = GBAD_DB.GetGBADProperties(_targetgroup)
         local timeoffset = timeoffset  or 0
-Debug("nisse - mantis_hackSuppression_onafterManageEvasion :: group: " .. _targetgroup.GroupName .. " :: typeName: " .. _targetgroup:GetTypeName() .. " :: skill: " .. _targetskill)
+-- Debug("nisse - mantis_hackSuppression_onafterManageEvasion :: group: " .. _targetgroup.GroupName .. " :: typeName: " .. _targetgroup:GetTypeName() .. " :: skill: " .. _targetskill)
 -- Debug("nisse - improveSuppression_onafterManageEvasion :: group: " .. _targetgroup.GroupName .. " :: typeName: " .. _targetgroup:GetTypeName() .. " :: properties: " .. DumpPrettyDeep(targetProperties))
         if self.TargetSkill[_targetskill] then
             local _evade = math.random (1,100) -- random number for chance of evading action
@@ -506,15 +506,15 @@ end
                         local grp = args[1] -- Wrapper.Group#GROUP
                         local name = args[2] -- #string Group Name
                         local attacker = args[3] -- Wrapper.Group#GROUP
-if DCAF.GBAD.Debug then
-DebugMessageTo(nil, "nisse - SUPPRESSION START :: name: " .. name .. " now: " .. timer.getTime())
-end
-Debug("nisse - mantis_hackSuppression :: self.UseEmissionsOnOff: " .. Dump(self.UseEmissionsOnOff))
+                        if DCAF.GBAD.Debug then
+                            DebugMessageTo(nil, "SUPPRESSION START :: name: " .. name .. " now: " .. timer.getTime())
+                        end
+-- Debug("nisse - mantis_hackSuppression :: self.UseEmissionsOnOff: " .. Dump(self.UseEmissionsOnOff))
                         if self.UseEmissionsOnOff then
                             grp:EnableEmission(false)
                         end
                         grp:OptionAlarmStateGreen() -- needed else we cannot move around
-Debug("nisse - mantis_hackSuppression :: iads.UseEvasiveRelocation: " .. Dump(iads.UseEvasiveRelocation))
+-- Debug("nisse - mantis_hackSuppression :: iads.UseEvasiveRelocation: " .. Dump(iads.UseEvasiveRelocation))
                         if iads.UseEvasiveRelocation then
                             grp:RelocateGroundRandomInRadius(20,300,false,false,"Diamond")
                         end
@@ -551,7 +551,7 @@ end
                     local now = timer.getTime()
                     local SuppressionStartTime = now + delay
                     local SuppressionEndTime = now + delay*2 + _tti + self.Padding
-Debug("nisse - SUPPRESSION :: delay: " .. Dump(delay) .. " :: _tti: " .. Dump(_tti) .. " :: START time: " .. SuppressionStartTime .. " :: END time: " .. SuppressionEndTime)
+-- Debug("nisse - SUPPRESSION :: delay: " .. Dump(delay) .. " :: _tti: " .. Dump(_tti) .. " :: START time: " .. SuppressionStartTime .. " :: END time: " .. SuppressionEndTime)
                     local _targetgroupname = _targetgroup:GetName()
                     if not self.SuppressedGroups[_targetgroupname] then
                         self:T(string.format("*** SEAD - %s | Parameters TTI %ds | Switch-Off in %ds", _targetgroupname, _tti, delay))
@@ -605,9 +605,9 @@ local function buildMANTIS_IADS(area)
     area.IADS:SetAdvancedMode(isAdvanced)
     area.IADS:SetDetectInterval(10)
 
-function area.IADS:OnAfterSeadSuppressionPlanned(From, Event, To, Group, Name, SuppressionStartTime, SuppressionEndTime)
-    Debug("nisse - GBAD / buildMANTIS_IADS :: SAM Suppression planned for '" .. Name  .. "'")
-end
+-- function area.IADS:OnAfterSeadSuppressionPlanned(From, Event, To, Group, Name, SuppressionStartTime, SuppressionEndTime)
+--     Debug("nisse - GBAD / buildMANTIS_IADS :: SAM Suppression planned for '" .. Name  .. "'")
+-- end
 
     if info.Debug then
         area.IADS:Debug(true)
