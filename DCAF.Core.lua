@@ -13351,6 +13351,108 @@ Debug("nisse - DCAF.Lase:_stop :: " .. unit.UnitName .. " :: laser OFF")
     unit:LaseOff()
 end
 
+
+------- SUBSTITUTE UNITS WITH EQUIVALENT STATIC  ----------
+
+local function getSpawnStaticFrom(unit)
+    local typeName = unit:GetTypeName()
+    local categoryName = unit:GetCategoryName()
+    local spawnStatic = SPAWNSTATIC:NewFromType(typeName, categoryName)
+    local coord = unit:GetCoordinate()
+    if coord then
+        spawnStatic:InitCoordinate(coord)
+    end
+    local heading = unit:GetHeading()
+    if heading then
+        spawnStatic:InitHeading(heading)
+    end
+    spawnStatic:InitCountry(unit:GetCountry())
+    -- TODO -- getSpawnStaticFrom :: initialize SPAWNSTATIC with unit livery (when figured out how to do that)
+    if not spawnStatic then
+        return Error("getSpawnStaticFrom :: cannot get SPAWNSTATIC from type: '" .. Dump(typeName) .. "' :: categoryName: " .. Dump(categoryName)) end
+
+    return spawnStatic, coord
+end
+
+--- Attempts replacing a unit with a static equivalent
+--- @param source any - name of UNIT/GROUP, or a UNIT/GROUP
+--- @param damage number - specifies damage [0,1] (0 = no damage; 1 = fully destroyed)
+--- @param damageAge number - specifies how long (seconds) since damage was sustained (is used to create smoke effects)
+--- @return table - list of #STATIC
+function SubstituteWithStatic(source, damage, damageAge)
+    local unit = getUnit(source)
+    if not unit then
+        local group = getGroup(source)
+        if not group then
+            return Warning("SubstituteWithStatic :: cannot resolve `source`: " .. DumpPretty(source) .. " :: IGNORES") end
+
+        local statics = {}
+        for _, u in ipairs(group:GetUnits()) do
+            local static = SubstituteWithStatic(u, damage, damageAge)
+            if static then
+                table.insert(statics, static[1])
+            end
+        end
+        return statics
+    end
+
+    if not isNumber(damage) then
+        damage = 0
+    end
+
+    if isVariableValue(damageAge) then
+        damageAge = damageAge:GetValue()
+    end
+    if not isNumber(damageAge) then
+        if damage == 0 then
+            damageAge = 0
+        else
+            damageAge = 9999
+        end
+    end
+
+    local spawnStatic, coord = getSpawnStaticFrom(unit)
+    if not spawnStatic then return Error("SubstituteWithStatic :: cannot resolve static from '" .. unit.UnitName .. "'") end
+
+    if unit:IsAlive() then
+        unit:Destroy()
+    end
+    if damage > 0 then
+        spawnStatic:InitDead(damage >= 0.6)
+    end
+    local static = spawnStatic:Spawn(nil, unit.UnitName .. " (static)")
+    if not static then return Error("SubstituteWithStatic :: could not spawn static from unit: '" .. unit.UnitName) end
+    if coord and damage > 0 and damageAge < Minutes(20) then
+        if damageAge > Minutes(10) then
+            coord:BigSmokeSmall(.05)
+        elseif damageAge > Minutes(5) then
+            coord:BigSmokeSmall(.3)
+        elseif damageAge > Minutes(3) then
+            coord:BigSmokeSmall(.5)
+        else
+            coord:BigSmokeSmall(1)
+        end
+    end
+    Debug("SubstituteWithStatic :: substituted unit '" .. unit.UnitName .. "' with static: " .. Dump(static.StaticName))
+    return { static }
+end
+
+--- Attempts replacing all units of a #GROUP with a static equivalent
+-- @param #number damage - specifies damage [0,1] (0 = no damage; 1 = fully destroyed)
+-- @param #number damageTime - (can also be #VariableValue) specifies how long (seconds) since damage was sustained (is used to create smoke effects)
+-- @return #table - list of #STATIC
+function GROUP:SubstituteWithStatic(damage, damageAge)
+    return SubstituteWithStatic(self, damage, damageAge)
+end
+
+--- Attempts replacing the #UNIT with a static equivalent
+-- @param #number damage - specifies damage [0,1] (0 = no damage; 1 = fully destroyed)
+-- @param #number damageTime - (can also be #VariableValue) specifies how long (seconds) since damage was sustained (is used to create smoke effects)
+-- @return #table - list of #STATIC
+function UNIT:SubstituteWithStatic(damage, damageAge)
+    return SubstituteWithStatic(self, damage, damageAge)
+end
+
 ---- SRS ----
 
 

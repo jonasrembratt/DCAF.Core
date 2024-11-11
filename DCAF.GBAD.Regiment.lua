@@ -35,6 +35,7 @@ local GBAD_REGIMENT_DEFAULTS = {
     AutoDeactivation = false,
     UseEvasiveRelocation = true,
     DespawnMethod = DCAF.GBAD.RegimentDespawnMethod.Despawn,  -- controls how a regiment despawns/spawns groups under its control
+    DestroyedUnitsPattern = "DESTROYED",
     MaxActiveSams = {
         Short = 1,
         Mid = 2,
@@ -64,6 +65,11 @@ DCAF.GBAD.Regiment = {
     MonitorActivationDistance = nil,      -- when enemy air groups gets inside this distance the regiment activates (spawns all inactive groups)
     MonitorPostActivationDistance = nil,  -- when Regiment is activated, individual GBAD groups gets activated as hostile air gets within this range
     MonitorDeactivationDistance = nil,    -- when no hostile air is found inside this distance the regiment deactivates (despawns all late activated groups)
+    AvailabilityFactors = {
+        Long = 1,               -- number [0-1] (eg. 0.1 = 10% of long range systems will be unavailable)
+        Medium = 1,             -- number [0-1] (eg. 0.1 = 10% of medium range systems will be unavailable)
+        SHORADS = 1,            -- number [0-1] (eg. 0.1 = 10% of SHORADS will be unavailable)
+    },
     DespawnMethod = GBAD_REGIMENT_DEFAULTS.DespawnMethod,-- controls how the regiment despawns/spawns groups under its control
     ExcludeDestroyedSAMDelay = GBAD_REGIMENT_DEFAULTS.ExcludeDestroyedSAMDelay -- time before an HQ excludes a SAM site that has been rendered useless
 }
@@ -296,6 +302,7 @@ local GBAD_REGIMENT_GROUP_INFO = {
     Spawn = nil,            -- #SPAWN
     Location = nil,         -- #DCAF.Location
     IsActive = false,       -- #boolean - indicates whether the group is currently spawned and active
+    IsInoperable = nil,     -- #boolean - indicates whether the group is rendered inoprerable (malfuncitoning, out of stock, or otherwise not able to operate)
     UnitStates = {
         -- key   = #number - unit internal index
         -- value = #GBAD_REGIMENT_UNIT_STATE
@@ -339,6 +346,16 @@ function GBAD_REGIMENT_GROUP_INFO:UpdateUnitDamage(unit, damage, time, isPreDest
     self.IsDamaged = true
     self.IsPreDestroyed = isPreDestroyed
     self.IsDestroyed = not DCAF.GBAD:QueryIsSAMFunctional(unit:GetGroup())
+end
+
+function GBAD_REGIMENT_GROUP_INFO:Categorize(regiment)
+    if self.Type then return self end
+    local range, height, type, blind = regiment._iads:_GetSAMRange(self.Group.GroupName)
+    self.Range = range
+    self.Height = height
+    self.Type = type
+    self.Blind = blind
+    return self
 end
 
 function GBAD_REGIMENT_GROUP_INFO:New(regiment, group, isInitialSpawn, isZoneLocked, category)
@@ -394,10 +411,6 @@ function GBAD_REGIMENT_GROUP_INFO:ScanAirborneUnits(range, coalition, breakOnFir
 end
 
 local function gbadRegiment_unitWasHit(unit, damage, time, isPreDestroyed) -- note: Was can pass a damage. Mainly for simulation/debugging purposes
-if unit then
-Debug("nisse - gbadRegiment_unitWasHit :: unit: " .. unit.UnitName)
-unit:Explode(500) -- nisse
-end
     damage = damage or unit:GetDamageRelative()
     time = time or UTILS.SecondsOfToday()
     if damage == 0 then
@@ -463,7 +476,6 @@ end
 
 --- Notifies all regimentrs a GBAD group has been nit
 function GBAD_REGIMENT_DB._notifyUnitHit(group, info, damage, time)
-Debug("nisse - GBAD_REGIMENT_DB._notifyUnitHit :: info: " .. DumpPretty(info))
     local regimentIndexes = GBAD_REGIMENT_DB.RegimentIndex
     if not regimentIndexes then return end
     local key = info.GroupName
@@ -488,8 +500,7 @@ function GBAD_REGIMENT_DB.BeginMonitorDamage()
 end
 
 local function restoreDamageState(group, info, now)
-
-    if not info.IsDamaged then return end
+    if not info.IsDamaged and not info.IsInoperable then return end
 
     local function addStatics(statics)
         if not info.Statics then
@@ -502,11 +513,14 @@ local function restoreDamageState(group, info, now)
 
     now = now or UTILS.SecondsOfToday()
     for _, unit in ipairs(group:GetUnits()) do
-        local key = getUnitKeyName(unit) -- unit:GetNumber()
+        local key = getUnitKeyName(unit)
         local state = info.UnitStates[key]
         if state and state.Damage > 0 then
             local damageAge = now - state.DamageTime
             local statics = SubstituteWithStatic(unit, state.Damage, damageAge)
+            addStatics(statics)
+        elseif info.IsInoperable then
+            local statics = SubstituteWithStatic(unit, 0, 0)
             addStatics(statics)
         end
     end
@@ -518,7 +532,6 @@ end
 -- @param #number interval :: (optional; default = configured staggered spawn interval) specifies an interval to be used for staggered spawning
 -- @param #boolean lobotomize :: (optional; default = false) when set the spawned group will have its AI controller removed
 function GBAD_REGIMENT_DB.Spawn(regiment, info, onSpawnedFunc, interval, lobotomize)
-Debug("nisse - GBAD_REGIMENT_DB.Spawn :: info: " .. info.GroupName)
     local now = UTILS.SecondsOfToday()
     info.IsActive = true
     if info.IsDynamicSpawn then
@@ -528,13 +541,14 @@ Debug("nisse - GBAD_REGIMENT_DB.Spawn :: info: " .. info.GroupName)
     info.RefSpawnCount = info.RefSpawnCount + 1
 
     local function initGroupDestruction()
-        if not regiment._destroyNamePattern or info._isDestroyInitialized then return end
+        local pattern = regiment._destroyNamePattern or GBAD_REGIMENT_DEFAULTS.DestroyedUnitsPattern
+        if info._isDestroyInitialized then return end
         info._isDestroyInitialized = true
-        local destroyAll = string.find(info.GroupName, regiment._destroyNamePattern)
+        local destroyAll = string.find(info.GroupName, pattern)
         local time = regiment._destroyTime
 
         local function destroyUnit(unit)
-            if not destroyAll and not string.find(unit.UnitName, regiment._destroyNamePattern) then return end
+            if not destroyAll and not string.find(unit.UnitName, pattern) then return end
             DCAF.GBAD.Regiment.SimulateHit(unit, 1, time, true)
         end
 
@@ -549,7 +563,10 @@ Debug("nisse - GBAD_REGIMENT_DB.Spawn :: info: " .. info.GroupName)
         if info.Category ~= GBAD_REGIMENT_GROUP_CATEGORY.SAM then
             return info.Group end
 
-        -- hack - this seems to be necessary to get MANTIS to reliably pick up late activated groups...
+        if regiment:GetIsInoperable(info) then -- some SAM groups might not be available (see DCAF.GBAD.Regiment:InitOperableSystems)
+            Debug("GBAD_REGIMENT_DB.Spawn :: group is inoperable (not included in IADS): " .. info.GroupName)
+            return info.Group
+        end
         if info.IsDestroyed then
             Debug("GBAD_REGIMENT_DB.Spawn :: group is destroyed (not included in IADS): " .. info.GroupName)
             return info.Group
@@ -588,15 +605,7 @@ Debug("nisse - GBAD_REGIMENT_DB.Spawn :: info: " .. info.GroupName)
         else
             info.Group:SetAIOn()
         end
-
--- local duration = 30
--- if interval <= 1 then
--- duration = 1
--- end
--- DebugMessageTo(nil, "Regiment " .. regiment.Name .. " activates " .. info.GroupName, duration)
-Debug("nisse - GBAD_REGIMENT_DB.Spawn_spawnNow :: group: " .. info.GroupName .. " :: skill: " .. skill .. " :: lobotomize: " .. Dump(lobotomize))
--- Debug("nisse - GBAD_REGIMENT_DB.Spawn_spawnNow :: info: " .. DumpPretty(info))
-        if info.IsPreDestroyed or (not lobotomize and (info.IsDynamicSpawn and info.IsDamaged)) then
+        if info.IsPreDestroyed or info.IsInoperable or (not lobotomize and (info.IsDynamicSpawn and info.IsDamaged)) then
             restoreDamageState(info.Group, info, now)
         end
         if isFunction(onSpawnedFunc) then
@@ -1060,6 +1069,13 @@ function DCAF.GBAD.Regiment:SetDefaultDistances(activation, postActivation, deac
     self:SetDefaultDectivationDistance(deactivation)
 end
 
+--- Sets the default namng pattern for designating destroyed units or groups
+--- @param pattern string - the pattern to be used
+function DCAF.GBAD.Regiment:SetDefaultDestroyedUnitsPattern(pattern)
+    if not isAssignedString(pattern) then return Error("DCAF.GBAD.Regiment:SetDefaultDestroyedUnitsPattern :: `pattern` must be assigned string, but was: " .. DumpPretty(pattern)) end
+    GBAD_REGIMENT_DEFAULTS.DestroyedUnitsPattern = pattern
+end
+
 function DCAF.GBAD.Regiment:SetDefaultActivationDistance(value)
     if not isNumber(value) then
         return Error("DCAF.GBAD.Regiment:SetDefaultActivationDistance :: `value` must be number, but was: " .. DumpPretty(value)) end
@@ -1126,6 +1142,51 @@ function DCAF.GBAD.Regiment:InitMaxActiveSAMs(short, mid, long)
     return self
 end
 
+function DCAF.GBAD.Regiment:GetIsInoperable(info)
+    if info.IsInoperable ~= nil then return info.IsInoperable end
+    info:Categorize(self)
+    local diceRoll = math.random(1000)
+
+    if info.Type == MANTIS.SamType.LONG then
+        info.IsInoperable = diceRoll > self.AvailabilityFactors.Long*1000
+    elseif info.Type == MANTIS.SamType.MEDIUM
+        then info.IsInoperable = diceRoll > self.AvailabilityFactors.Medium*1000
+    elseif info.Type == MANTIS.SamType.SHORT then
+        info.IsInoperable = diceRoll > self.AvailabilityFactors.SHORADS*1000
+    else
+        error("DCAF.GBAD.Regiment:_isAvailable :: unknown SAM type: " .. DumpPretty(info.Type)) -- just a safe guard
+    end
+    if self.Debug and info.IsInoperable then
+        -- visualize inoperable group
+        local coord = info.Group:GetCoordinate()
+        if coord then
+            coord:MarkToAll("Inoperable system", false, "Type: " .. info.Type)
+        end
+    end
+    return info.IsInoperable
+end
+
+--- Sets a value ([0-1]) for how many SAM groups will be operable, or randomly picked out as unavailable for the IADS (down for maintenance, broken, lack of munitions, etc)
+--- @param long number - value [0-1] (eg. 0.1 = 10% of long range systems will be operable). Set to 1 for 100% operability
+--- @param medium number - value [0-1] (eg. 0.1 = 10% of medium range systems will be operable). Set to 1 for 100% operability
+--- @param shorads number - value [0-1] (eg. 0.1 = 10% of SHORADS will be operable). Set to 1 for 100% operability
+function DCAF.GBAD.Regiment:InitRandomOperableSystems(long, medium, shorads)
+    Debug("DCAF.GBAD.Regiment:InitOperableSystems :: long: " .. Dump(long) .. " :: medium: " .. Dump(medium) .. " :: shorads: " .. Dump(shorads))
+    local function ensureRange(value, argName, default)
+        if value == nil then return default end
+        if not isNumber(value) then return default end
+        if value < 0 or value > 1 then
+            return Error("DCAF.GBAD.Regiment:InitOperableSystems :: `" .. argName .. "` must be numeric value betwen 0 thru 1, but was: " .. DumpPretty(long), default)
+        end
+        return value
+    end
+
+    self.AvailabilityFactors.Long = ensureRange(long, 'long', self.AvailabilityFactors.Long)
+    self.AvailabilityFactors.Medium = ensureRange(medium, 'medium', self.AvailabilityFactors.Medium)
+    self.AvailabilityFactors.SHORADS = ensureRange(shorads, 'short', self.AvailabilityFactors.SHORADS)
+    return self
+end
+
 function DCAF.GBAD.Regiment:_notifyUnitHit(group, info, damage, time)
     Debug("DCAF.GBAD.Regiment:_notifyUnitHit :: info: " .. DumpPretty(info) .. " :: damage: " .. Dump(damage) .. " :: time: " .. UTILS.SecondsToClock(time))
     if info.IsDestroyed and not info._scheduledForExclusion then
@@ -1179,12 +1240,11 @@ Debug(regiment.ClassName .. "/gbadRegimentSetSNSZones :: regiment._iads.Shorad: 
 end
 
   --- Function to set accept and reject zones.
-  -- @param #MANTIS self
-  -- @param #any accept single zone, or table of @{Core.Zone#ZONE} objects
-  -- @param #any reject single zone, or table of @{Core.Zone#ZONE} objects
-  -- @param #any conflict single zone, or table of @{Core.Zone#ZONE} objects
-  -- @return #DCAF.GBAD.Regiment self
-  -- @usage
+  --- @param accept any accept single zone, or table of @{Core.Zone#ZONE} objects
+  --- @param reject any reject single zone, or table of @{Core.Zone#ZONE} objects
+  --- @param conflict any  single zone, or table of @{Core.Zone#ZONE} objects
+  --- @return self DCAF.GBAD.Regiment 
+  --- @usage
   -- Parameters are either zones, or **tables of Core.Zone#ZONE** objects!   
   -- This is effectively a 3-stage filter allowing for zone overlap. A coordinate is accepted first when   
   -- it is inside any AcceptZone. Then RejectZones are checked, which enforces both borders, but also overlaps of   
@@ -1373,7 +1433,7 @@ function DCAF.GBAD.Regiment:DestroyUnits(namePattern, time)
     end
     local clockTime = UTILS.SecondsToClock(time)
     Debug("DCAF.GBAD.Regiment:DestroyUnits :: " .. self.Name .. " :: namePattern: " .. Dump(namePattern) .. " :: time: " .. Dump(clockTime))
-    if not isAssignedString(namePattern) then namePattern = "DESTROYED" end
+    if not isAssignedString(namePattern) then namePattern = GBAD_REGIMENT_DEFAULTS.DestroyedUnitsPattern end
     self._destroyNamePattern = namePattern
     self._destroyTime = time
     return self
@@ -1475,9 +1535,7 @@ function DCAF.GBAD.Regiment:OnDeactivated(func)
 end
 
 function DCAF.GBAD.Regiment:Debug(value, uiDuration)
-    if not isBoolean(value) then
-        value = true end
-
+    if not isBoolean(value) then value = true end
     self.Debug = value
     if isNumber(uiDuration) then
         self.DebugUIDuration = uiDuration
