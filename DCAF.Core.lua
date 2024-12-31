@@ -1508,6 +1508,11 @@ function Knots(knots)
     return UTILS.KnotsToMps(knots)
 end
 
+--- Converts speed expressed as Mach to meters per second
+function Mach(mach)
+    return mach * 343
+end
+
 function MachToKnots(mach)
     if not isNumber(mach) then
         error("MachToKnots :: `mach` must be a number but was : " .. type(mach)) end
@@ -1704,9 +1709,9 @@ function listCopyWhere(source, target, sourceCriteriaFunc)
 end
 
 --- Creates a new list by concatenating all items of two lists
--- @param #table Items from this list will be at start of new list
--- @param #table Items from this list will be added at the end of new list
--- @return #table The new list
+---@param list table Items from this list will be at start of new list
+---@param otherList table Items from this list will be added at the end of new list
+---@return table list The resulting new list
 function listJoin(list, otherList)
     if not isList(list) then
         error("listJoin :: `list` must be a list, but was: " .. type(list)) end
@@ -1742,6 +1747,7 @@ function tableCopy(source, target, deep)
     return target, count
 end
 
+---- Returns the internal index of an item in a table, if it exists (otherwise nil)
 function tableIndexOf( table, itemOrFunc )
     if not isTable(table) then
         error("tableIndexOf :: unexpected type for table: " .. type(table)) end
@@ -1886,6 +1892,14 @@ if nisse then
     Debug(nisseText)
 end
     return item, index
+end
+
+function listShuffleItems(list)
+    if not isList(list) then return Error("listShuffleItems :: `list` must be a list, but was: " .. DumpPretty(list), list) end
+    for i = #list, 2, -1 do
+        local j = math.random(1, i)
+        list[i], list[j] = list[j], list[i]
+    end
 end
 
 --- Iterates items in a table while applying a time interval between each iteration
@@ -3241,7 +3255,17 @@ function DCAF.Location:GetAltitude(realtime)
     if realtime and self.IsControllable then
         return self.Source:GetAltitude(self.IsAltitudeAsl), self.IsAltitudeAsl
     end
-    return self.Altitude or self:GetCoordinate().y, self.IsAltitudeAsl
+    self.Altitude = self.Altitude or self:GetLandHeight()
+    return self.Altitude
+    -- return self.Altitude or self:GetCoordinate().y, self.IsAltitudeAsl
+end
+
+function DCAF.Location:GetLandHeight()
+    return self:GetCoordinate():GetLandHeight()
+end
+
+function DCAF.Location:CircleToAll(radius, coalition, color, alpha, fillColor, fillAlpha, lineType, readOnly, text)
+    return self:GetCoordinate():CircleToAll(radius, coalition, color, alpha, fillColor, fillAlpha, lineType, readOnly, text)
 end
 
 function DCAF.Location:OffsetDistance(value)
@@ -3415,6 +3439,18 @@ function DCAF.ClosestUnits:ForEachUnit(func, coalition, sortOnDistance)
     for _, info in ipairs(units) do
         func(info.Unit, info.Distance)
     end
+end
+
+function DCAF.ClosestUnits:GetUnitList(coalition, sortOnDistance)
+    local units = self.Units
+    if sortOnDistance then
+        units = self:GetSortedOnDistance()
+    end
+    local list = {}
+    for _, info in ipairs(units) do
+        list[#list+1] = info.Unit
+    end
+    return list
 end
 
 DCAF_GetAirborneUnits_Cache_TTL = 1
@@ -5146,88 +5182,6 @@ function COORDINATE:CalculateRouteETA(waypoints, startTime)
     return CalculateRouteETA(waypoints, self, startTime)
 end
 
-
-function SetRoute( controllable, route )
-    if (controllable == nil) then
-        return exitWarning("SetRoute-? :: controllable not specified")
-    end
-    if (not isTable(route)) then
-        return exitWarning("SetRoute-? :: invalid route (not a table)")
-    end
-    local group = getGroup(controllable)
-    if (group == nil) then
-        return exitWarning("SetRoute-? :: group not found: "..Dump(controllable))
-    end
-    group:Route( route )
-    Trace("SetRoute-"..group.GroupName.." :: group route was set :: DONE")
-end
-
-function RouteDirectTo( controllable, waypoint, setRoute )
-    if (controllable == nil) then
-        return exitWarning("DirectTo-? :: controllable not specified")
-    end
-    if (waypoint == nil) then
-        return exitWarning("DirectTo-? :: steerpoint not specified")
-    end
-
-    local route = nil
-    local group = getGroup( controllable )
-    if ( group == nil ) then
-        return exitWarning("DirectTo-? :: cannot resolve group: "..Dump(controllable))
-    end
-
-    route = group:CopyRoute()
-    if (route == nil) then
-        return exitWarning("DirectTo-" .. group.GroupName .." :: cannot resolve route from controllable: "..Dump(controllable)) end
-
-    local wpIndex = nil
-    if (isString(waypoint)) then
-        local wp = FindWaypointByName( route, waypoint )
-        if (wp == nil) then
-            return exitWarning("DirectTo-" .. group.GroupName .." :: no waypoint found with name '"..waypoint.."'") end
-
-        wpIndex = wp.index
-    elseif (isNumber(waypoint)) then
-        wpIndex = waypoint
-    else
-        return exitWarning("DirectTo-" .. group.GroupName .." :: cannot resolved steerpoint: "..Dump(waypoint))
-    end
-
-    local directToRoute = {}
-    for i=wpIndex,#route,1 do
-        table.insert(directToRoute, route[i])
-    end
-
-    if setRoute == true then
-        SetRoute(group, directToRoute)
-    end
-    return directToRoute
-end
-
-function ChangeSpeed( controllable, changeMPS )
-
-Debug("ChangeSpeed :: changeMPS: " .. Dump(changeMPS))
-    local validGroup = getGroup(controllable)
-    if not validGroup then
-        return Error("ChangeSpeed-? :: `controllable` must specify a unit or group, but was: " .. DumpPretty(controllable))
-    end
-    if not isNumber(changeMPS) then
-        return Error("ChangeSpeed-? :: `changeMPS` must be number, but was: " .. DumpPretty(changeMPS))
-    end
-    local speedMPS = controllable:GetVelocityMPS()
-Debug("ChangeSpeed :: controllable: " .. controllable.UnitName .. " :: speedMPS: " .. Dump(speedMPS))
-    local speedMPS = speedMPS + changeMPS
-Debug("ChangeSpeed :: controllable: " .. controllable.UnitName .. " :: changeMPS: " .. Dump(speedMPS))
-    validGroup:SetSpeed(speedMPS, true)
-Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
---     local controller = controllable:_GetController()
---     if controller then 
--- Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
---         controller:setSpeed(speedMPS)
---     end
-    return controllable
-end
-
 local function calcGroupOffset( group1, group2 )
 
     local coord1 = group1:GetCoordinate()
@@ -5661,6 +5615,191 @@ function CommandStart(controllable, delay, startedFunc)
     else
         start()
     end
+end
+
+-- function ActivateWeapons(source, value)
+--     if not isBoolean(value) then value = true end
+--     local group
+--     if isGroup(source) then
+--         group = source
+--     elseif isAssignedString(source) then
+--         group = GROUP:FindByName(source)
+--     end
+--     if group then
+--         local units = group:GetUnits()
+--         for _, unit in ipairs(units) do
+--             ActivateWeapons(unit, value)
+--         end
+--         return
+--     end
+
+--     local function setWeaponCount(dcsUnit, setCount)
+--         local index = {}
+--         local ammo = dcsUnit:getAmmo()
+-- Debug("nisse - ActivateWeapons_setWeaponCount :: ammo: " .. DumpPrettyDeep(ammo, 2))
+--         for _, weapon in ipairs(ammo) do
+--             index[weapon.desc.typeName] = weapon.count
+--             if isNumber(setCount) then
+--                 weapon.count = setCount
+--             else
+--                 weapon.count = setCount[weapon.desc.typeName]
+--             end
+--         end
+--         return index
+--     end
+
+--     local unit = getUnit(source)
+--     local msgVerb
+--     if value then msgVerb = "reactivate" else msgVerb = "deactivate" end
+--     local dcsUnit = unit:GetDCSObject()
+--     local ammo = {}
+--     if not dcsUnit then return Error("ActivateWeapons :: cannot " .. msgVerb .. " weapons (no DCS object found for unit: " .. unit.UnitName .. ")") end
+--     if not unit then return Error("ActivateWeapons :: cannot activate ") end
+--     if value then
+--         ammo = unit._DCAF_ammo_index
+--         if not ammo then return Error("ActivateWeapons :: cannot reactivate weapons (seems weapons was not deactivated previously)") end
+--         setWeaponCount(dcsUnit, ammo)
+--         unit._DCAF_ammo_index = nil
+--     else
+
+--         unit._DCAF_ammo_index = setWeaponCount(dcsUnit, 0)
+--     end
+-- end
+
+-- function DeactivateWeapons(source)
+
+
+--     return ActivateWeapons(source, false)
+-- end
+
+local FeintAttackEvent = {
+    IniUnit = nil,  -- #UNIT (initiating the feint atack)
+    TgtUnit = nil   -- feint attack target (#UNIT)
+}
+
+function FeintAttackEvent:New(iniUnit, tgtUnit)
+    local obj = DCAF.clone(FeintAttackEvent)
+    obj.IniGroup = iniUnit:GetGroup()
+    obj.IniGroupName = obj.IniGroup.GroupName
+    obj.IniUnit = iniUnit
+    obj.TgtUnit = tgtUnit
+    return obj
+end
+
+function FeintAttackEvent:Deactivate()
+    local group = self.IniGroup
+    Debug("FeintAttackEvent:Deactivate :: " .. self.IniGroupName)
+    if group:IsGround() or group:IsShip() then
+        group:OptionAlarmStateGreen()
+    elseif group:IsAir() then
+        group:OptionROEHoldFire()
+    end
+end
+
+--- Makes a group appear to attack but weapons are immediately neutralized, emulating provocation or signalling "final warning" etc.
+--- @param group any - #GROUP, or name of #GROUP
+--- @param maxShots number - (optional) [default = 1] specifies max number of feined attacks. A value > 10 specifies time (seconds) before group ALARM state is set to green
+--- @param shootAllowance any - (optional) if null; no shot will be allowed (group will only lock). If number then shot weapon is elimitaed after as many seconds. If boolean allowShot = 1 second
+--- @param maxTime number - (optional) specifies maximum time for the feined attack. Oncec it times out it will end (see `funcDone`)
+--- @param funcDone function - (optional) function to be called back when all feint attacks are complete
+--- @param funcEvent function - (optional) function to be called back for each feint attack (see max)
+function FeintAttack(group, maxShots, shootAllowance, maxTime, funcDone, funcEvent)
+    local validGroup = getGroup(group)
+    if not validGroup then return Error("FeintAttack :: could not resolve a group from: " .. DumpPretty(group)) end
+    if not validGroup:IsActive() then return Error("FeintAttack :: group was not active: " .. validGroup.GroupName) end
+    validGroup:OptionAlarmStateRed()
+    validGroup:OptionROEOpenFire()
+
+    local maxShots
+    local countShots = 0
+    local endTime
+    local hasEnded
+
+    local function endFeintAttack(feintAttackObject)
+Debug("nisse - FeintAttack :: ends :: " .. group.GroupName .. " :: hasEnded: " .. Dump(hasEnded))
+        validGroup:UnHandleEvent(EVENTS.Shot)
+        if hasEnded then return end
+        hasEnded = true
+        if isFunction(funcDone) then
+            pcall(function()
+                funcDone(feintAttackObject)
+            end)
+            return
+        end
+        validGroup:OptionAlarmStateAuto()
+        validGroup:OptionROEHoldFire()
+    end
+
+    if not isNumber(maxShots) then maxShots = 1 end
+    if isNumber(maxTime) and maxTime > 1 then
+Debug("nisse - FeintAttack :: sets timeout to " .. maxTime .. " seconds")
+        endTime = UTILS.SecondsOfToday() + maxTime
+        DCAF.delay(function()
+Debug("nisse - FeintAttack :: times out :: group: " .. group.GroupName)
+            endFeintAttack()
+        end, maxTime)
+    end
+    if not shootAllowance then shootAllowance = 0 end
+    if shootAllowance == true then shootAllowance = 0.2 end
+
+    validGroup:HandleEvent(EVENTS.Shot, function(_, e)
+        local feintAttackObject = FeintAttackEvent:New(e.IniUnit, e.TgtUnit)
+        local weapon = e.weapon
+        DCAF.delay(function()
+            weapon:destroy()
+            Debug("FeintAttack :: " .. validGroup.GroupName .. " :: weapon neutralized")
+        end, shootAllowance)
+        if maxShots then
+            countShots = countShots+1
+            if countShots >= maxShots then
+                Debug("FeintAttack :: " .. validGroup.GroupName .. " :: max number of shots fired: " .. maxShots)
+                endFeintAttack(feintAttackObject)
+            end
+        elseif endTime and UTILS.SecondsOfToday() >= endTime then
+            Debug("FeintAttack :: " .. validGroup.GroupName .. " :: times out after " .. maxShots .. " seconds")
+            endFeintAttack(feintAttackObject)
+        elseif isFunction(funcEvent) then
+            pcall(function()
+                funcEvent(feintAttackObject)
+            end)
+        end
+    end)
+end
+
+function DamageUnit(unit, damage)
+    local validUnit = getUnit(unit)
+    if not validUnit then return Error("DamageUnit :: cannot resolve unit from: " .. DumpPretty(unit)) end
+    unit = validUnit
+    local coord = unit:GetCoordinate()
+    if not coord then return Error("DamageUnit :: cannot get coordinate from unit: " .. DumpPretty(unit.UnitName)) end
+    Debug("nisse - DamageUnit :: (aaa) life: " .. unit:GetLife() .. " :: life0: " .. unit:GetLife0() .. " :: lifeRelative: " .. unit:GetLifeRelative())
+
+    local translateHeading
+    local translateDistance
+    local altitude
+    if unit:IsAir() then
+        if not isNumber(damage) then damage = 10 end -- TODO consider calculating size of explosion based on total life
+        translateHeading = (unit:GetHeading() - 180) % 360
+        translateDistance = 15
+        altitude = 15
+    end
+
+    if not isNumber(damage) then damage = 6 end
+
+    if translateHeading then
+        coord = coord:Translate(translateDistance, translateHeading)
+    end
+    if altitude then
+        coord:SetAltitude(unit:GetAltitude(false) + altitude, true)
+    end
+    coord:Explosion(damage)
+
+MessageTo(nil, "nisse - DamageUnit :: *BOOM*!!!")
+DCAF.delay(function()
+    Debug("nisse - DamageUnit :: (bbb) life: " .. unit:GetLife() .. " :: life0: " .. unit:GetLife0() .. " :: lifeRelative: " .. unit:GetLifeRelative())
+end, 1)
+
+    return unit
 end
 
 --- Activates a LATE ACTIVATED group and returns it
@@ -6274,7 +6413,7 @@ function _e:onEvent( event )
     --     })
     -- end
 
-    if event.id == world.event.S_EVENT_PLAYER_LEAVE_UNIT then 
+    if event.id == world.event.S_EVENT_PLAYER_LEAVE_UNIT then
         if event.IniUnitName then
             PlayersAndUnits:Remove(event.IniUnitName)
             MissionEvents:Invoke( _missionEventsHandlers._playerLeftUnitHandlers, event )
@@ -6667,26 +6806,32 @@ function GROUP:GetFuelLowState()
 end 
 
 function setGroupRoute(group, waypoints)
-    local testGroup = getGroup(group)
-    if not testGroup then
-        error("SetGroupRoute :: cannot resolve #GROUP from `" .. DumpPretty(group) .. "`") end
+    local validGroup = getGroup(group)
+    if not validGroup then return Error("SetGroupRoute :: cannot resolve #GROUP from: " .. DumpPretty(group)) end
+    if not isList(waypoints) then return Error("GROUP:SetRoute :: `waypoints` must be a list, but was: " .. DumpPretty(waypoints)) end
 
-    if not isList(waypoints) then
-        error("GROUP:SetRoute :: `waypoints` must be a list, but was: " .. DumpPretty(waypoints)) end
-
-    group = testGroup
+    group = validGroup
     group._route = waypoints
     group:Route(waypoints)
+    Debug("setGroupRoute :: "..group.GroupName.." :: group route was set :: DONE")
+    if not group._DCAF_setRouteHandlers then return end
+    -- trigger OnRoute event...
+    for _, handler in ipairs(group._DCAF_setRouteHandlers) do
+        pcall(function() handler(group, waypoints) end)
+    end
     return group
 end
 
 function getGroupRoute(group)
-    local testGroup = getGroup(group)
-    if not testGroup then
-        error("getGroupRoute :: cannot resolve #GROUP from `" .. DumpPretty(group) .. "`") end
-
-    group = testGroup
-    return group._route or group:CopyRoute()
+    local validGroup = getGroup(group)
+    if not validGroup then
+        if isClass(group, DCAF.Convoy) then
+            validGroup = group.Group
+        else
+            return Error("getGroupRoute :: cannot resolve #GROUP from: " .. DumpPretty(group))
+        end
+    end
+    return validGroup._route or validGroup:CopyRoute()
 end
 
 function GROUP:SetRoute(waypoints)
@@ -6696,6 +6841,89 @@ end
 function GROUP:GetRoute()
     return getGroupRoute(self)
 end
+
+function SetRoute( controllable, route )
+    -- NOTE method is among the oldest. Retained only for backward compatibility
+    local group = getGroup(controllable)
+    if not group then return Error("SetRoute :: group not found: "..Dump(controllable)) end
+    setGroupRoute(group, route)
+end
+
+function HandleSetRouteEvent( controllable, handler )
+    local group = getGroup(controllable)
+    if not group then return Error("HandleSetRouteEvent :: cannot resolve group from: " .. DumpPretty(controllable)) end
+    if not isFunction(handler) then return Error("HandleSetRouteEvent :: `handler` must be function, but was: " .. DumpPretty(handler)) end
+    group._DCAF_setRouteHandlers = group._DCAF_setRouteHandlers or {}
+    group._DCAF_setRouteHandlers[#group._DCAF_setRouteHandlers+1] = handler
+    return group
+end
+
+function RouteDirectTo( controllable, waypoint, setRoute )
+    if (controllable == nil) then
+        return exitWarning("DirectTo-? :: controllable not specified")
+    end
+    if (waypoint == nil) then
+        return exitWarning("DirectTo-? :: steerpoint not specified")
+    end
+
+    local route = nil
+    local group = getGroup( controllable )
+    if ( group == nil ) then
+        return exitWarning("DirectTo-? :: cannot resolve group: "..Dump(controllable))
+    end
+
+    route = group:CopyRoute()
+    if (route == nil) then
+        return exitWarning("DirectTo-" .. group.GroupName .." :: cannot resolve route from controllable: "..Dump(controllable)) end
+
+    local wpIndex = nil
+    if (isString(waypoint)) then
+        local wp = FindWaypointByName( route, waypoint )
+        if (wp == nil) then
+            return exitWarning("DirectTo-" .. group.GroupName .." :: no waypoint found with name '"..waypoint.."'") end
+
+        wpIndex = wp.index
+    elseif (isNumber(waypoint)) then
+        wpIndex = waypoint
+    else
+        return exitWarning("DirectTo-" .. group.GroupName .." :: cannot resolved steerpoint: "..Dump(waypoint))
+    end
+
+    local directToRoute = {}
+    for i=wpIndex,#route,1 do
+        table.insert(directToRoute, route[i])
+    end
+
+    if setRoute == true then
+        SetRoute(group, directToRoute)
+    end
+    return directToRoute
+end
+
+function ChangeSpeed( controllable, changeMPS )
+
+Debug("ChangeSpeed :: changeMPS: " .. Dump(changeMPS))
+    local validGroup = getGroup(controllable)
+    if not validGroup then
+        return Error("ChangeSpeed-? :: `controllable` must specify a unit or group, but was: " .. DumpPretty(controllable))
+    end
+    if not isNumber(changeMPS) then
+        return Error("ChangeSpeed-? :: `changeMPS` must be number, but was: " .. DumpPretty(changeMPS))
+    end
+    local speedMPS = controllable:GetVelocityMPS()
+Debug("ChangeSpeed :: controllable: " .. controllable.UnitName .. " :: speedMPS: " .. Dump(speedMPS))
+    local speedMPS = speedMPS + changeMPS
+Debug("ChangeSpeed :: controllable: " .. controllable.UnitName .. " :: changeMPS: " .. Dump(speedMPS))
+    validGroup:SetSpeed(speedMPS, true)
+Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
+--     local controller = controllable:_GetController()
+--     if controller then 
+-- Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
+--         controller:setSpeed(speedMPS)
+--     end
+    return controllable
+end
+
 
 --- Gets the unit that is closest to a specified coordinate
 function GROUP:GetClosestUnit(location)
@@ -8311,11 +8539,11 @@ function DCAF.Carrier:HeadIntoWind(timeSeconds, scope, onResumeFunc)
 -- coordWarning:CircleToAll(nil, nil, {0,0,1})     -- nisse --
 -- end
             wpWarning = coordWarning:WaypointNaval(UTILS.MpsToKmph(speedMps))
-            WaypointCallback(wpWarning, function() 
+            WaypointCallback(wpWarning, function()
                 local timeWarningMinutes = math.floor((timeSeconds - timeWarningSeconds) / 60)
                 local name = self.DisplayName or self.Group.GroupName
                 MessageTo(scope, name .. " will resume route in " .. timeWarningMinutes .. " minutes")
-            end)    
+            end)
         end
         local coordEnd = coord:Translate(distance, brc)
 -- if warn then            
@@ -9044,12 +9272,14 @@ function DCAF_ServiceTrack:Execute(direct) -- direct = service will proceed dire
     end
 
     local function drawActiveTrack(color)
-        if not self.Color then
+        
+        if not isList(color) then color = self.Color end
+        if not color then
             return end
 
         local rgbColor
         if self.IsTrackDrawn then
-            self.Color = { 1, 0, 0 }
+            self.Color = color or { 1, 0, 0 }
         end
 
         self.IsTrackDrawn = true
@@ -9940,7 +10170,9 @@ DCAF.AirServiceBehavior = {
     BingoFuelState = .17,    -- #number - percentage of full fuel that defines BINGO fuel state
     RtbAirdrome = nil,       --
     Availability = DCAF.AirServiceAvailability.InTrack,
-    NotifyAssignmentScope = '_none_' -- #Any - coalition (eg. coalition.side.BLUE), #GROUP (or group name) or '_none_'
+    NotifyAssignmentScope = '_none_', -- #Any - coalition (eg. coalition.side.BLUE), #GROUP (or group name) or '_none_'
+    MaxExtendDownwindLeg = nil,       -- meters - specifies how much the tanker can extend the downwind leg when someone's plugged in
+    MaxExtendHeadwindLeg = nil,       -- meters - specifies how much the tanker can extend the headwind leg when someone's plugged in
 }
 
 function DCAF.AirServiceBehavior:New()
@@ -9983,6 +10215,16 @@ function DCAF.AirServiceBehavior:WithAvailability(availability, delaySeconds)
         self.AvailabilityDelay = delaySeconds
     end
     self.Availability = availability
+    return self
+end
+
+function DCAF.AirServiceBehavior:SetMaxExtendLegs(downwind, headwind)
+    if isNumber(downwind) and downwind > 0 then
+        self.MaxExtendDownwindLeg = downwind
+    end
+    if isNumber(headwind) and headwind > 0 then
+        self.MaxExtendHeadwindLeg = headwind
+    end
     return self
 end
 
@@ -10663,10 +10905,10 @@ local function notifyTankerAssignment(track, tanker, isReassigned, airbase)
 end
 
 --- Activates a tanker in air to work this track
--- @param #DCAF.AvailableTanker tankerInfo :: the tanker to be activated for the track
--- @param #DCAF.AirServiceBehavior behavior :: describes the tanker's behavior (such as availability etc)
--- @param #DCAF.Location location :: (optional; default=a few miles from track anchor) specifies start location
--- @param #number altitude :: (optional; default=20000 feet) specifies start location altitude
+--- @param tankerInfo DCAF.AvailableTanker  the tanker to be activated for the track
+--- @param behavior DCAF.AirServiceBehavior  describes the tanker's behavior (such as availability etc)
+--- @param location DCAF.Location  (optional; default=a few miles from track anchor) specifies start location
+--- @param altitude number (optional; default=20000 feet) specifies start location altitude
 function DCAF.TankerTrack:ActivateAir(tankerInfo, behavior, location, altitude)
     if tankerInfo.GroupRTB then
         self:Reassign(tankerInfo)
@@ -11558,13 +11800,14 @@ local function buildControllerTankerMenus(caption, scope, parentMenu)
                                  end
                             end
                         else
+                            local parentMenu = (rtbMenu or menuTrack)._parentMenu
                             if group then
-                                MENU_GROUP_COMMAND:New(group, menuText, rtbMenu or menuTrack, sendTankerHome, airbaseName, nil, allowPostpone)
+                                MENU_GROUP_COMMAND:New(group, menuText, parentMenu, sendTankerHome, airbaseName, nil, allowPostpone)
                             else
-                                MENU_COALITION_COMMAND:New(dcafCoalition, menuText, rtbMenu or menuTrack, sendTankerHome, airbaseName, nil, allowPostpone)
+                                MENU_COALITION_COMMAND:New(dcafCoalition, menuText, parentMenu, sendTankerHome, airbaseName, nil, allowPostpone)
                             end
                         end
-                    end                
+                    end
                 end
 
                 if airdromes then
@@ -11862,6 +12105,7 @@ end
  
 DCAF.MENU = {
     ClassName = "DCAF.MENU"
+    ----
 }
 
 function getMenuText(menu)

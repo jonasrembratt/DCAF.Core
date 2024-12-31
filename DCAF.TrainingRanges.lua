@@ -362,6 +362,7 @@ function DCAF.TrainingRange:SpawnAndCallback(callbackFunc, ...)
 Debug("nisse - DCAF.TrainingRange:Spawn :: now: " .. UTILS.SecondsToClock(now) .. " :: _nextSpawn: " .. UTILS.SecondsToClock(self._nextSpawn or now))
 
     local function spawnNow(source)
+Debug("nisse - DCAF.TrainingRange:Spawn :: source: " .. DumpPrettyDeep(source, 1))
         local spawn
         if isAssignedString(source) then
             spawn = self.Spawns[source]

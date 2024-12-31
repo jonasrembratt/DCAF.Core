@@ -160,6 +160,9 @@ DCAF_GBADDatabase = {
 }
 
 --- Returns a list of information blocks for a specified (GBAD) source (type name, GROUP, UNIT, or name of GROUP or UNIT)
+---@param source any Can be #UNIT, #GROUP, or name of unit or group
+---@param includeDeadUnits boolean (optional) [default = true] Specifies whether to include dead units in result
+---@return table infos (optional) A table of #DCAF_RadarInfo items
 function DCAF_GBADDatabase:GetInfo(source, includeDeadUnits)
     local info
     if isAssignedString(source) then
@@ -179,11 +182,14 @@ function DCAF_GBADDatabase:GetInfo(source, includeDeadUnits)
         local infos = {}
         local units = group:GetUnits()
         for _, unit in ipairs(units) do
-            if includeDeadUnits or unit:IsAlive() then return end
-            info = DCAF_GBADDatabase[unit:GetTypeName()]
-            if info then
--- Debug("nisse - DCAF_GBADDatabase:GetInfo :: unit type: " .. unit:GetTypeName() .. " :: info: " .. DumpPretty(info))
-                infos[#infos+1] = info
+            if includeDeadUnits or unit:IsAlive() then
+                local key = unit:GetTypeName()
+                info = DCAF_GBADDatabase[key]
+                if info then
+                    infos[#infos+1] = info
+                else
+                    Debug("DCAF_GBADDatabase:GetInfo :: unit type: " .. key .. " :: NO INFO")
+                end
             end
         end
         return infos
@@ -197,12 +203,12 @@ local DCAF_GBADInfo = {
     NatoName = nil,                     -- #string - NATO reporting name of radar
     RangeLateral = 0,                   -- #number - Radar/system engagement range (meters)
     RangeVertical = 0,                  -- #number - Radar/system engagement ceiling (meters)
-    IsEWR = false,                      -- #boolean - Specifies whether unit can be Warly Warning Radar
-    Radar = nil,                        -- dictonary (key = radar type [#DCAF.RadarType], value = { list of bands } )
+    IsEWR = false,                      -- #boolean - Specifies whether unit can be Early Warning Radar
+    Radar = nil,                        -- dictionary (key = radar type [#DCAF.RadarType], value = { list of bands } )
 
     -- IsSearchRadar = false,              -- #boolean - Specifies whether unit has search radar capability
     -- IsTrackingRadar = false,            -- #boolean - Specifies whether unit has tracking radar capability
-    -- IsLauncher = false,                 -- #boolean - Specifies whether unit is an G-A nissile launcher
+    -- IsLauncher = false,                 -- #boolean - Specifies whether unit is an G-A missile launcher
 }
 
 local DCAF_RadarInfo = {
@@ -238,25 +244,37 @@ end
 
 function DCAF_GBADInfo:InitEWR(bands)
     self.Radar = self.Radar or {}
-    self.Radar[DCAF.RadarType.EarlyWarning] = bands
+    self.Radar[DCAF.RadarType.EarlyWarning] = bands or true
     return self
 end
 
 function DCAF_GBADInfo:InitSR(bands)
     self.Radar = self.Radar or {}
-    self.Radar[DCAF.RadarType.Search] = bands
+    self.Radar[DCAF.RadarType.Search] = bands or true
     return self
+end
+
+function DCAF_GBADInfo:IsSearchRadar()
+    return self.Radar and self.Radar[DCAF.RadarType.Search]
 end
 
 function DCAF_GBADInfo:InitTR(bands)
     self.Radar = self.Radar or {}
-    self.Radar[DCAF.RadarType.Tracking] = bands
+    self.Radar[DCAF.RadarType.Tracking] = bands or true
     return self
 end
 
+function DCAF_GBADInfo:IsTrackingRadar()
+    return self.Radar and self.Radar[DCAF.RadarType.Tracking]
+end
+
 function DCAF_GBADInfo:InitLauncher()
-    self.IsLauncher = true
+    self._isLauncher = true
     return self
+end
+
+function DCAF_GBADInfo:IsLauncher()
+    return self._isLauncher
 end
 
 function DCAF_GBADInfo:InitRange(lateral, vertical)
@@ -297,6 +315,10 @@ DCAF_GBADInfo:New("Osa 9A33 ln", "SA-8 Gecko SHORAD"):InitTR():InitLauncher():In
 DCAF_GBADInfo:New("S-300PS 40B6MD sr", "SA-10 Clam Shell SR"):InitSR():InitRange(NauticalMiles(46), Feet(99000))
 DCAF_GBADInfo:New("S-300PS 40B6M tr", "SA-10 Flap Lid TR"):InitTR():InitRange(NauticalMiles(46), Feet(99000))
 DCAF_GBADInfo:New("S-300PS 64H6E sr", "SA-10 Big Bird SR"):InitSR():InitRange(NauticalMiles(46), Feet(99000))
+DCAF_GBADInfo:New("S-300PS 54K6 cp", "S-300PS 54K6 CP"):InitLauncher():InitRange(NauticalMiles(46), Feet(99000))
+DCAF_GBADInfo:New("S-300PS 5P85C ln", "S-300PS 54K6 LN"):InitLauncher():InitRange(NauticalMiles(46), Feet(99000))
+DCAF_GBADInfo:New("S-300PS 5P85D ln", "S-300PS 5P85D LN"):InitLauncher():InitRange(NauticalMiles(46), Feet(99000))
+
 -- SA-11 Gadfly
 DCAF_GBADInfo:New("SA-11 Buk SR 9S18M1", "SA-11 Snow Drift SR"):InitSR():InitRange(NauticalMiles(23), Feet(60000))
 DCAF_GBADInfo:New("SA-11 Buk LN 9A310M1", "SA-11 Fire Dome TEL"):InitTR():InitLauncher():InitRange(NauticalMiles(23), Feet(60000))
@@ -319,22 +341,21 @@ DCAF_GBADInfo:New("SON_9", "Fire Can"):InitTR():InitRange(NauticalMiles(50), Fee
 local function dcafGbadQueryIsSAM(infos)
 end
 
---- Returns true if source is a funcitonal SAM site (can track and shoot)
+--- Returns true if source is a functional SAM site (can track and shoot)
 function DCAF.GBAD:QueryIsSAM(source, includeDeadUnits)
     local infos = DCAF_GBADDatabase:GetInfo(source, includeDeadUnits)
     if not infos then
--- Debug("nisse - DCAF.GBAD:QueryIsSAM :: no info: " .. source.GroupName)
-    return end
+        Debug("DCAF.GBAD:QueryIsSAM :: no info: " .. source.GroupName)
+        return
+    end
     local isLN, isTR
     for _, info in ipairs(infos) do
-        isLN = isLN or info.IsLauncher
-        isTR = isTR or info.IsTrackingRadar
+        isLN = isLN or info:IsLauncher()
+        isTR = isTR or info:IsTrackingRadar()
         if isTR and isLN then
--- Debug("nisse - DCAF.GBAD:QueryIsSAM :: is functional: " .. source.GroupName)
             return true
         end
     end
--- Debug("nisse - DCAF.GBAD:QueryIsSAM :: is non-functional: " .. source.GroupName)
 end
 
 --- Returns true if source is a functional SAM site (can track and shoot). Dead units will not be considered
@@ -344,8 +365,9 @@ end
 
 
 --- Queries GBAD database to check for max range of a GBAD source
--- @param #Any source - specifies the GBAD to be queried
--- @return #number, #number - max lateral range and max vertical range
+--- @param source any specifies the GBAD to be queried. Can be #UNIT, or name of a unit
+--- @return number maxLateralRange max lateral range
+--- @return number maxVerticalRange max vertical range
 function DCAF.GBAD:QueryRange(source)
     local infos = DCAF_GBADDatabase:GetInfo(source)
     local maxLateral = 0
@@ -365,7 +387,6 @@ end
 local TracePrefix = "BadLand :: "             -- used for traces
 
 local function teardownMantisIADS(area, force)
--- Debug("nisse - teardownMantisIADS :: area.IADS: " .. DumpPretty(area.IADS))
     if not area.IADS then
         return end
     

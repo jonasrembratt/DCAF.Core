@@ -1,15 +1,10 @@
 -- //////////////////////////////////////////////////////////////////////////////////
---                                     KORAT
---                                     *****
+--                                     DCAF.CombatAirPatrol
+--                                     ********************
 -------------------------------------------------------------------------------------
 -- DEPENDENCIES
 --   MOOSE
 --   DCAF.Core
---   DCAF.Story
---   DCAF.GM_Menu
-
-local _codeword = "DCAF.CombatAirPatrol"
-local _vec3capRef = _codeword .. " CAPREF"
 
 local CAP_THREAT = {
     None = 0,          -- no tracked target (can support other CAP)
@@ -17,6 +12,14 @@ local CAP_THREAT = {
     Medium = 2,        -- tracked target is either inferior and heading for CAP, or equal but heading elsewhere (MIGHT support other CAP)
     High = 3,          -- CAP is engaged/supporting, or tracked target is either superior or heading for CAP (cannot support other CAP)
     Critical = 4       -- tracked target is superior force, headng for CAP. This is the flight-or-fight moment!
+}
+
+DCAF.AirThreat = {
+    ClassName = "DCAF.AirThreat",
+    ----
+    ThreatSum = 0,
+    ThreatSize = 0,
+    ThreatGroups = {}
 }
 
 local CAP_INFO = {
@@ -28,7 +31,7 @@ local CAP_INFO = {
     TrackedGroup = nil,                 -- #GROUP being tracked, and considered for engagement
     TrackedCluster = nil,               -- #INTEL.Cluster being tracked, and considered for engagement
     Manager = nil,                      -- #DCAF.CombatAirPatrol (or whatever we'll call it later)
-    MinimumAttackRatio = 1.1,           -- #number The minimum numeric ratio required for a CAP to engage -- TODO consider ways to make this configurable
+    -- MinimumAttackRatio = 1.1,           -- #number The minimum numeric ratio required for a CAP to engage -- TODO consider ways to make this configurable
 
     Supporting = {
         -- key   = name of CAP supporting this CAP
@@ -133,7 +136,7 @@ function DCAF.AirStrategy:OnAcceptNewTargetGroup(group)
 end
 
 --- Calculates a heading from average air units locations and average target units location
-function DCAF.AirStrategy:GetFightAxis(update)
+function DCAF.AirStrategy:GetThreatAxis(update)
     if update or self._fightAxis == nil then
         local airUnitsLocation = self:GetMedianCoordinate(self:GetAliveAirUnits())
         local tgtUnitsLocation = self:GetMedianCoordinate(self:GetAliveTgtUnits())
@@ -167,10 +170,11 @@ function DCAF.AirStrategy:Debug_End()
     end
 end
 
--- TODO - consider moving to more general (common) code
-function DCAF.AirStrategy:GetMedianCoordinate(locations)
-
-    if not isList(locations) or #locations < 2 then return Error("DCAF.AirStrategy:GetMedianCoordinate :: `locations` must be list of locations") end
+local function getMedianCoordinate(locations)
+    if not isList(locations) or #locations == 0 then
+Debug("nisse - getMedianCoordinate :: locations: " .. DumpPrettyDeep(locations, 2))
+        return Error("getMedianCoordinate :: `locations` must be list of locations")
+    end
 
     local function calculateMedian(numbers)
         table.sort(numbers)
@@ -190,7 +194,7 @@ function DCAF.AirStrategy:GetMedianCoordinate(locations)
 
     for i, location in ipairs(locations) do
         local validLocation = DCAF.Location.Resolve(location)
-        if not validLocation then return Error("DCAF.AirStrategy:GetMedianCoordinate :: locations[" .. i .. "] cannot be resolved: " .. DumpPretty(location)) end
+        if not validLocation then return Error("getMedianCoordinate :: locations[" .. i .. "] cannot be resolved: " .. DumpPretty(location)) end
         local coord = validLocation:GetCoordinate()
         table.insert(xValues, coord.x)
         table.insert(yValues, coord.y)
@@ -204,11 +208,15 @@ function DCAF.AirStrategy:GetMedianCoordinate(locations)
     return DCAF.Location:New(COORDINATE:New(medianX, medianY, medianZ))
 end
 
+-- TODO - consider moving to more general (common) code
+function DCAF.AirStrategy:GetMedianCoordinate(locations)
+    return getMedianCoordinate(locations)
+end
+
 function DCAF.AirStrategy:OnExecute()
     -- implements very basic strategy: Each air group simply attacks the closest available target group
     local function groupsToString(groups)
         return toString(groups, function(capInfo)
--- Debug("nisse - groupsToString :: group: " .. DumpPretty(capInfo))
             return capInfo.GroupName
         end)
     end
@@ -433,8 +441,23 @@ function CAP_INFO:CanSupport(cap) -- cap: #CAP_INFO - called to see if CAP can s
     end
 end
 
-local function Scram(capInfo, location)
-    local self = capInfo
+local function delouseCAP(capInfo, airThreat)
+Debug("nisse - delouseCAP :: " .. capInfo.Name)
+    -- find best delouse option...
+    local manager = capInfo.Manager
+
+    for _, capInfo in ipairs(manager.CAPGroups) do
+        
+    end
+end
+
+local function scramCAP(capInfo, threat, location)
+    if not capInfo.CAPGroup:IsAlive() then
+Debug("nisse - scramCAP :: " .. capInfo.Name .. " :: CAPGroup is dead :: IGNORES")
+        return
+    end 
+    local coord = capInfo.CAPGroup:GetCoordinate()
+    if not coord then return end
     local airbase
     if location ~= nil then
         local validLocation = DCAF.Location.Resolve(location)
@@ -445,28 +468,52 @@ local function Scram(capInfo, location)
         if validLocation:IsAirbase() then
             airbase = validLocation.Source
         end
+    else
+        airbase = capInfo.Manager:SelectScramAirbase(capInfo, threat)
+        if not airbase then
+            local heading = threat:HeadingTo(coord)
+            local coordScram = coord:Translate(NauticalMiles(150), heading)
+            location = DCAF.Location:NewRaw(capInfo.Name.."-Scram", coordScram, coordScram)
+        else
+Debug("nisse - scramCAP :: airbase: " .. airbase.AirbaseName)
+        end
     end
 
     local airGroup = capInfo.CAPGroup
-    local speedKmh = airGroup:GetSpeedMax()
-Debug("nisse - CAP_INFO:Scram :: " .. self.Name .. " :: speed: " .. speedKmh .. " km/h (" .. UTILS.KmphToKnots(speedKmh) .. " kt)")
+    local speedKmh = airGroup:GetSpeedMax() or UTILS.KnotsToKmph(1200)
+local nisse_speedKmh
+if not speedKmh then nisse_speedKmh = "(null)" else nisse_speedKmh = UTILS.KmphToKnots(speedKmh) end
+Debug("nisse - scramCAP :: " .. capInfo.Name .. " :: speed: " .. speedKmh .. " km/h (" .. nisse_speedKmh .. " kt)")
+capInfo:Disengage(false)
     if airbase then
-        self:Disengage(false)
+Debug("nisse - scramCAP :: " .. capInfo.Name .. " :: airbase: " .. airbase.AirbaseName)
         if airbase then
-            airGroup:RouteRTB(airbase, speedKmh)
-            airGroup:SetSpeed(UTILS.KmphToMps(speedKmh))
+            RTBNow(airGroup, airbase, nil, speedKmh)
+            -- airGroup:RouteRTB(airbase, speedKmh * 1.5)
         end
     elseif location == nil then
-        self:Disengage()
-        airGroup:RouteRTB(nil, speedKmh)
-        airGroup:SetSpeed(UTILS.KmphToMps(speedKmh))
+        capInfo:Disengage()
+        airGroup:RouteRTB(nil, speedKmh * 1.5)
     else
-        self:ReturnToCAP()
+Debug("nisse - scramCAP :: " .. capInfo.Name .. " :: no airbase - just scrams for 150nm and then lands")
+        local coordLocation = location:GetCoordinate()
+        coordLocation:MarkToAll("SCRAM - " .. capInfo.Name)
+        local route = {
+            coordLocation:WaypointAirFlyOverPoint("RADIO", speedKmh)
+        }
+        setGroupRoute(capInfo.CAPGroup, route)
     end
 end
 
+local function delouseOrScramCAP(capInfo, threat, scramLocation)
+    local cap = capInfo.Manager
+    if not cap._delouseOptions then
+        scramCAP(capInfo, threat, scramLocation)
+    end
+    delouseCAP(capInfo, threat)
+end
+
 function CAP_INFO:CalculateTrackedClusterThreatAndSize() -- EDITED --
--- nisse --
     local threatLevelMax = self.Manager._intel:CalcClusterThreatlevelMax(self.TrackedCluster)
     return threatLevelMax, DCAF.CombatAirPatrol:GetClusterSize(self.TrackedCluster)
 end
@@ -540,8 +587,10 @@ DCAF.CombatAirPatrol = {
     CapMonitorPredictTime = Minutes(1), -- the time used to calculate a cluster's future position, while being tracked
     CapTriggerDistanceNm = 20,          -- when calculated to be closer than this (from CAP), within `CapMonitorPredictTime` seconds a hostile cluster 
     CAP_INFO_CAP_WAYPOINT_IDENT = "CAP",
-    Groups = {
-        CAP = {}
+    MinimumAttackRatio = 1.1,           -- #number The minimum numeric ratio required for a CAP to engage -- TODO consider ways to make this configurable
+    MinimumRetreatRatio = 0.8,          -- #number When ration falls below this value the CombatAirPatrol invoke its ExecuteDefensiveStrategy function
+    CAPGroups = {
+        -- list of #CAP_INFO
     },
     AirStrategies = {
         -- list of #DCAF.AirStrategy
@@ -557,6 +606,120 @@ function DCAF.CombatAirPatrol:New(name, capMonitorDistanceNm, capMonitorPredictS
     if isNumber(capMonitorPredictSeconds) then cap.CapMonitorPredictTime = capMonitorPredictSeconds end
     if isNumber(capTriggerDistanceNm) then cap.CapTriggerDistanceNm = capTriggerDistanceNm end
     return cap
+end
+
+function DCAF.CombatAirPatrol:InitMinimumAttackRatio(value)
+    if not isNumber(value) then return Error("DCAF.CombatAirPatrol:InitMinimumAttackRatio :: value must be number, but was: " .. DumpPretty(value), self) end
+    self.MinimumAttackRatio = value
+    return self
+end
+
+function DCAF.CombatAirPatrol:InitMinimumRetreatRatio(value)
+    if not isNumber(value) then return Error("DCAF.CombatAirPatrol:InitMinimumRetreatRatio :: value must be number, but was: " .. DumpPretty(value), self) end
+    self.MinimumRetreatRatio = value
+    return self
+end
+
+function DCAF.CombatAirPatrol:InitScramAirbase(location)
+    local listOfLocations
+    if isListOfAssignedStrings(location) then
+        listOfLocations = {}
+        for _, l in ipairs(location) do
+            local loc = DCAF.Location.Resolve(l)
+            if not isAirbase(loc.Source) then return Error("DCAF.CombatAirPatrol:InitScramAirbase :: location is not a valid AIRBASE: " .. DumpPretty(loc.Source), self) end
+            listOfLocations[#listOfLocations+1] = loc
+        end
+    elseif isListOfClass(location, DCAF.Location) then
+        for _, loc in ipairs(location) do
+            if not isAirbase(loc.Source) then return Error("DCAF.CombatAirPatrol:InitScramAirbase :: location is not a valid AIRBASE: " .. DumpPretty(loc.Source), self) end
+        end
+        listOfLocations = location
+    else
+        local validLocation = DCAF.Location.Resolve(location)
+        if not validLocation or not isAirbase(validLocation.Source) then return Error("DCAF.CombatAirPatrol:InitScramAirbase :: cannot resolve AIRBASE from: " .. DumpPretty(location), self) end
+        listOfLocations = { validLocation }
+    end
+    self._scramAirbases = listOfLocations
+    return self
+end
+
+function DCAF.CombatAirPatrol:SelectScramAirbase(capInfo, threat)
+    local coord = capInfo.CAPGroup:GetCoordinate()
+    if not coord then return end
+    local setAirbase
+    if not self._scramAirbases then
+        if not coord then return end
+        local coalition = capInfo.CAPGroup:GetCoalition()
+        setAirbase = SET_AIRBASE:New():FilterCoalitions(coalition):FilterOnce()
+    else
+        setAirbase = SET_AIRBASE:New()
+        for _, locAirbase in ipairs(self._scramAirbases) do
+            setAirbase:AddAirbase(locAirbase.Source)
+        end
+    end
+
+    local coordThreat = threat:GetCoordinate()
+    local headingFromThreat = coordThreat:HeadingTo(coord)
+    local eval = {
+        ClosestAirbase = nil,
+        ClosestDistance = NauticalMiles(9999),
+        -- the 'safe' alternative is inside safe bearings (away from threat)
+        ClosestSafeAirbase = nil,
+        ClosestSafeDistance = NauticalMiles(9999),
+        -- safe bearings
+        MinSafeBearing = (headingFromThreat - 130) % 360,
+        MaxSafeBearing = (headingFromThreat + 130) % 360,
+    }
+    function eval:isSafeHeading(heading)
+        local rel = GetRelativeDirection(heading, self.MinSafeBearing)
+        if rel < 0 then return false end
+        rel = GetRelativeDirection(heading, self.MaxSafeBearing)
+        return rel <= 0
+    end
+    function eval:process(airbase)
+        local coordAirbase = airbase:GetCoordinate()
+        local distance = coord:Get2DDistance(coordAirbase)
+        local headingToAirbase = coord:HeadingTo(coordAirbase)
+        local isSafeHeading = self:isSafeHeading(headingToAirbase)
+        if isSafeHeading then
+            if self.ClosestSafeDistance >= distance then return end
+            self.ClosestSafeAirbase = airbase
+            self.ClosestSafeDistance = distance
+        else
+            if self.ClosestDistance >= distance then return end
+            self.ClosestAirbase = airbase
+            self.ClosestDistance = distance
+        end
+    end
+    function eval:selectAirbase()
+        if self.ClosestSafeAirbase then
+            return self.ClosestSafeAirbase
+        else
+            return self.ClosestAirbase
+
+        end
+    end
+
+    setAirbase:ForEachAirbase(function(airbase)
+        eval:process(airbase)
+    end)
+    return eval:selectAirbase()
+end
+
+function DCAF.CombatAirPatrol:InitDelouseOptions(cap)
+    local caps
+    if isClass(cap, DCAF.CombatAirPatrol) then
+        caps = { cap }
+    elseif isListOfClass(cap, DCAF.CombatAirPatrol) then
+        caps = cap
+    else
+        return Error("DCAF.CombatAirPatrol:InitDelouseOptions :: `cap` must be #" .. DCAF.CombatAirPatrol.ClassName  .. " or a list thereof, but was: " .. DumpPretty(cap))
+    end
+    self._delouseOptions = self._delouseOptions or {}
+    for _, cap in ipairs(caps) do
+        self._delouseOptions[#self._delouseOptions+1] = cap
+    end
+    return self
 end
 
 function DCAF.CombatAirPatrol:DebugMessage(message)
@@ -608,29 +771,56 @@ end
 function DCAF.CombatAirPatrol:Start(coalition, capPattern, ewrPattern, awacsPattern)
     local validCoalition = Coalition.Resolve(coalition, true)
     if not validCoalition then return Error("DCAF.CombatAirPatrol:Start :: could not resolve coalition: " .. DumpPretty(coalition)) end
-    if not isAssignedString(capPattern) then return Error("DCAF.CombatAirPatrol:Start :: `capPattern` must be assigned string, but was: " .. DumpPretty(capPattern)) end
 
-    if DCAF.CombatAirPatrol._start_menu then DCAF.CombatAirPatrol._start_menu:Remove(true) end
-    local prefixes = { capPattern }
-    if isAssignedString(ewrPattern) then prefixes[#prefixes+1] = ewrPattern end
-    if isAssignedString(awacsPattern) then prefixes[#prefixes+1] = awacsPattern end
+    local function ensureList(value, argName)
+        if value == nil then return nil end
+        if isAssignedString(value) then
+            return { value }
+        elseif not isListOfAssignedStrings(value) then
+            return Error("DCAF.CombatAirPatrol:Start :: `" .. argName .. "` must be assigned string, or list thereof, but was: " .. DumpPretty(capPattern))
+        end
+        return value
+    end
+
+    local function join(tgtList, sourceList)
+        if not isListOfAssignedStrings(sourceList) then return tgtList end
+        for _, item in ipairs(sourceList) do
+            tgtList[#tgtList+1] = item
+        end
+        return tgtList
+    end
+
+
+    local validCapPattern = ensureList(capPattern, 'capPattern')
+    if not validCapPattern then return self end
+    local validEwrPattern = ensureList(ewrPattern, 'ewrPattern')
+    local validAwacsPattern = ensureList(awacsPattern, 'awacsPattern')
+
+    if isAssignedString(capPattern) then
+        capPattern = { capPattern }
+    elseif not isListOfAssignedStrings(capPattern) then
+        return Error("DCAF.CombatAirPatrol:Start :: `capPattern` must be assigned string, or list thereof, but was: " .. DumpPretty(capPattern))
+    end
+    local prefixes = join(join(capPattern,  validEwrPattern), validAwacsPattern)
     local setDetection = SET_GROUP:New():FilterPrefixes(prefixes):FilterOnce()
     self._intel = INTEL:New(setDetection, validCoalition, self.Name)
                        :SetFilterCategory(Group.Category.AIRPLANE, Group.Category.HELICOPTER) -- EDIT --
+    self:_applyDebug()
     self._intel:__Start(2)
 
     local function startCAP(group)
         if not group:IsActive() or not group:IsAlive() then return end
         Debug(self.Name ..  ":Start :: added CAP group: " .. group.GroupName)
-        self.Groups.CAP[group.GroupName] = CAP_INFO:New(group, self)
+        self.CAPGroups[group.GroupName] = CAP_INFO:New(group, self)
         self._intel:AddAgent(group)
         group:OptionROEHoldFire()
     end
 
-    local setGroups = SET_GROUP:New():FilterPrefixes(capPattern):FilterOnce()
+    local setGroups = SET_GROUP:New():FilterPrefixes(validCapPattern):FilterOnce()
     setGroups:ForEachGroup(function(group)
         startCAP(group)
     end)
+    Debug("DCAF.CombatAirPatrol:Start :: " .. self.Name .. " :: CAP Groups: " .. DumpPretty(self.CAPGroups))
 
     self._schedulerID = DCAF.startScheduler(function()
         local clusters = self._intel:GetClusterTable()
@@ -682,8 +872,10 @@ function DCAF.AirStrategy:GetAliveUnits(listOfgroups)
     local aliveUnits = {}
     for _, group in ipairs(listOfgroups) do
         local units = group:GetUnits()
-        for _, unit in ipairs(units) do
-            if unit:IsAlive() then aliveUnits[#aliveUnits+1] = unit end
+        if units then
+            for _, unit in ipairs(units) do
+                if unit:IsAlive() then aliveUnits[#aliveUnits+1] = unit end
+            end
         end
     end
     return aliveUnits
@@ -708,8 +900,9 @@ end
 function DCAF.AirStrategy:CalculateRatio()
     local airUnits = self:CountAliveAirUnits()
     local tgtUnits = self:CountAliveTgtUnits()
--- Debug("nisse - DCAF.AirStrategy:CalculateRatio :: airUnits: " .. airUnits .. " :: tgtUnits: " .. tgtUnits)
-    return airUnits / tgtUnits
+    local ratio = airUnits / tgtUnits
+Debug("nisse - DCAF.AirStrategy:CalculateRatio :: airUnits: " .. airUnits .. " :: tgtUnits: " .. tgtUnits .. " :: ratio:" .. ratio)
+    return airUnits / tgtUnits, tgtUnits
 end
 
 function DCAF.AirStrategy:GetIntelContactGroups(ignoreTargetGroups)
@@ -721,7 +914,7 @@ function DCAF.AirStrategy:GetIntelContactGroups(ignoreTargetGroups)
             groups[#groups+1] = group
         end
     end
-Debug("nisse - DCAF.AirStrategy:GetIntelContactGroups :: groups: " .. DumpPrettyDeep(groups, 1))
+-- Debug("nisse - DCAF.AirStrategy:GetIntelContactGroups :: groups: " .. DumpPrettyDeep(groups, 1))
     return groups
 end
 
@@ -764,24 +957,10 @@ function DCAF.CombatAirPatrol:ExecuteOffensiveStrategy(caps, tgtGroup, tgtCluste
             local coordAirGroup = airGroup:GetCoordinate()
             if not coordAirGroup then return false end
             local contact = self._intel:GetContactByName(tgtGroup.GroupName)
--- Debug("nisse - isThreat :: contact: " .. DumpPrettyDeep(contact, 2))
             local threatLevel = self._intel:GetContactThreatlevel(contact)
             if threatLevel < 6 then return false end
             local distance = coordAirGroup:Get2DDistance(self:CalculateFuturePosition(contact, Minutes(2)))
             local hot = distance < NauticalMiles(20)
-
--- if hot then -- nisse
---     local nisse_coord_tgtGroup = tgtGroup:GetCoordinate()
---     local nisse_ids = {}
---     nisse_ids[#nisse_ids+1] = coordAirGroup:CircleToAll()
---     nisse_ids[#nisse_ids+1] = nisse_coord_tgtGroup:CircleToAll()
---     nisse_coord_tgtGroup:LineToAll(coordAirGroup)
---     DCAF.startScheduler(function()
---         for _, id in ipairs(nisse_ids) do
---             COORDINATE:RemoveMark(id)
---         end
---     end, 120)
--- end
             return hot
         end
 
@@ -789,27 +968,37 @@ function DCAF.CombatAirPatrol:ExecuteOffensiveStrategy(caps, tgtGroup, tgtCluste
             airStrategy._dca = nil
             for _, airGroup in ipairs(airStrategy.AirGroups) do
                 airGroup._dca = nil
-                for _, airUnit in ipairs(airGroup:GetUnits()) do
-                    airUnit._dca = nil
+                local units = airGroup:GetUnits()
+                if units then
+                    for _, airUnit in ipairs(units) do
+                        airUnit._dca = nil
+                    end
                 end
             end
             for _, tgtGroup in ipairs(airStrategy.TargetGroups) do
                 tgtGroup._dca = nil
-                for _, airUnit in ipairs(tgtGroup:GetUnits()) do
-                    airUnit._dca = nil
+                local units = tgtGroup:GetUnits()
+                if units then
+                    for _, airUnit in ipairs(units) do
+                        airUnit._dca = nil
+                    end
                 end
             end
         end
 
-        local function scram()
+        local function scram(threat)
             Debug(self.Name..":ExecuteOffensiveStrategy_dca :: all air units scrams (ratio too unfavourable)")
             self:DebugMessage("AirStrategy '".. self.Name .."'. Friendly units are out-gunned. Scrams!")
+local nisse = {}
+for _, i in ipairs(caps) do
+    nisse[#nisse+1] = i.Name
+end            
+Debug("nisse - scram :: caps: " .. DumpPretty(nisse))
             for _, capInfo in ipairs(caps) do
-                Scram(capInfo)
+                delouseOrScramCAP(capInfo, threat)
             end
-            dispose()
             airStrategy:Stop()
-            airStrategy.Manager:End() -- TODO - the "manager" is currently a DCAF.Story. Once refactored in to something more fitting, the method should probaby be "Stop"
+            dispose()
         end
 
         local function returnToCAP()
@@ -826,6 +1015,9 @@ function DCAF.CombatAirPatrol:ExecuteOffensiveStrategy(caps, tgtGroup, tgtCluste
             local threatGroups = {}
             for _, airGroup in ipairs(airGroups) do
                 for _, tgtGroup in ipairs(tgtGroups) do
+if self.Name == "CAP DEFENCE 1" then
+Debug("nisse - getThreatGroups :: threatGroupsIndex: " .. DumpPretty(threatGroupsIndex))
+end
                     if not threatGroupsIndex[tgtGroup.Name] and isThreat(airGroup, tgtGroup) then
                         self:DebugMessage("Strategy '".. airStrategy:GetName() .. "' detects threat: " .. tgtGroup.GroupName)
                         threatGroupsIndex[tgtGroup.GroupName] = tgtGroup
@@ -841,16 +1033,19 @@ function DCAF.CombatAirPatrol:ExecuteOffensiveStrategy(caps, tgtGroup, tgtCluste
         local threatGroups = getThreatGroups()
         if #threatGroups > 0 then airStrategy:AddTargetGroups(threatGroups) end
 
-        -- scram if being too badly outnumbered...
-        local ratio = airStrategy:CalculateRatio()
-        if ratio < 0.8 then return scram() end
+        -- scram when too badly outnumbered...
+        local ratio, threatSize = airStrategy:CalculateRatio()
+        if ratio <= self.MinimumRetreatRatio then
+            local threat = DCAF.AirThreat:New(threatSize, airStrategy.TargetGroups)
+            return scram(threat)
+        end
 
         -- check for TGT units leaving...
         local now = UTILS:SecondsOfToday()
         local tgtUnits = airStrategy:GetAliveTgtUnits()
-        local airUnits = airStrategy:GetAliveAirUnits()
+        -- local airUnits = airStrategy:GetAliveAirUnits()
         local countCold = 0
-        local fightAxis = airStrategy:GetFightAxis(true)
+        local fightAxis = airStrategy:GetThreatAxis(true)
         local fightAxisHeading = fightAxis.Start:HeadingTo(fightAxis.End)
 
         local function initialize()
@@ -941,15 +1136,17 @@ function DCAF.CombatAirPatrol:AddAirStrategy(airStrategy)
     self.AirStrategies[#self.AirStrategies+1] = airStrategy
 end
 
+function DCAF.CombatAirPatrol:_applyDebug()
+    if not self._debug or not self._intel then return self end
+Debug("nisse - DCAF.CombatAirPatrol:Debug :: sets cluster analysis ON")
+    self._intel:SetClusterAnalysis(true, true, true)
+    self._intel:SetVerbosity(2)
+end
+
 function DCAF.CombatAirPatrol:Debug(value)
+-- Debug("nisse - DCAF.CombatAirPatrol:Debug :: self: " .. DumpPretty(self))
     self._debug = value
-Debug("nisse - DCAF.CombatAirPatrol:Debug :: self: " .. DumpPretty(self))
-    if value ~= false then
-        Debug("nisse - DCAF.CombatAirPatrol:Debug :: sets cluster analysis ON")
-        self._intel:SetClusterAnalysis(true, true, true)
-        self._intel:SetVerbosity(2)
-    end
-    return self
+    return self:_applyDebug()
 end
 
 function DCAF.CombatAirPatrol:IsDebug()
@@ -972,7 +1169,7 @@ function DCAF.CombatAirPatrol:SortClosestAvailableCAP(coord, inSupportOfCAP)
         availableCaps[#availableCaps+1] = { CAP = capInfo, Distance = capCoord:Get2DDistance(coord) }
     end
 
-    for _, info in pairs(self.Groups.CAP) do
+    for _, info in pairs(self.CAPGroups) do
         calcCAP(info)
     end
     table.sort(availableCaps, function (a, b)
@@ -1008,30 +1205,27 @@ function DCAF.CombatAirPatrol:GetClosestAvailableCAP(coord, inSupportOfCAP)
         end
     end
 
-    for _, info in pairs(self.Groups.CAP) do
+    for _, info in pairs(self.CAPGroups) do
         calcCAP(info)
     end
-
--- local nisse_closest = "(none)"
--- if closestCapInfo then nisse_closest = closestCapInfo.Name end
--- Debug("nisse - DCAF.CombatAirPatrol:GetClosestAvailableCAP :: closest: " .. nisse_closest .. " :: distanceTGT: " .. UTILS.MetersToNM(closestDistanceTGT) .. " :: distanceCAP: " .. UTILS.MetersToNM(closestDistanceCAP or 0) )
     return closestCapInfo, closestDistanceTGT, closestDistanceCAP
 end
 
-DCAF.AirThreat = {
-    ClassName = "DCAF.AirThreat",
-    ----
-    ThreatSum = 0,
-    ThreatSize = 0,
-    ThreatGroups = {}
-}
-
-function DCAF.AirThreat:New(threatSum, threatSize, threatGroups)
+function DCAF.AirThreat:New(threatSize, threatGroups, threatSum)
     local threat = DCAF.clone(DCAF.AirThreat)
-    threat.ThreatSum = threatSum
     threat.ThreatSize = threatSize
     threat.ThreatGroups = threatGroups
+    threat.ThreatSum = threatSum -- TODO - currently the threat SUM is not used. Consider removing if not needed
     return threat
+end
+
+function DCAF.AirThreat:GetCoordinate()
+    return getMedianCoordinate(self.ThreatGroups)
+end
+
+function DCAF.AirThreat:HeadingTo(coordinate)
+    local coordSelf = self:GetCoordinate()
+    return coordSelf:HeadingTo(coordinate)
 end
 
 function DCAF.CombatAirPatrol:EvaluateCluster(capInfo, cluster, threatSum, distance, clusterIndex, countClusters)
@@ -1058,7 +1252,7 @@ function DCAF.CombatAirPatrol:EvaluateCluster(capInfo, cluster, threatSum, dista
 
     -- group will penetrate the protected airspace...
     local trackedGroup, trackedCluster, trackedThreatSum, trackedDistance = capInfo:GetTrackedGroup()
-    if clusterIndex == 1 then
+    if not capInfo._eval then
         local clusterSize, clusterGroups, index = self:GetClusterSize(cluster)
         capInfo._eval = {
             Clusters = { cluster },
@@ -1086,15 +1280,14 @@ function DCAF.CombatAirPatrol:EvaluateCluster(capInfo, cluster, threatSum, dista
 -- DebugIf( isFulcrum, "nisse - DCAF.CombatAirPatrol:EvaluateCluster :: capInfo: " .. capInfo.Name .. " :: tracks: " .. tgtGroup.GroupName)
     end
 
-    if clusterIndex == countClusters or not capInfo:GetTrackedGroup() then return end
+    local isLastCluster = clusterIndex == countClusters
+    if isLastCluster or not capInfo:GetTrackedGroup() then return end
+
     local coordTGT = tgtGroup:GetCoordinate()
 -- DebugIf( isFulcrum, "nisse - DCAF.CombatAirPatrol:EvaluateCluster :: highest threat: " .. tgtGroup.GroupName)
 
     local caps = { capInfo }
     local unitCount = capInfo:GetSize()
-if self._eval == nil then
-Debug("nisse - DCAF.CombatAirPatrol:EvaluateCluster :: WTF!? :: clusterIndex: " .. clusterIndex)
-end
 
     local threatSize = capInfo._eval.ThreatUnitCount -- self:GetClusterSize(cluster)
     local ratio = unitCount / threatSize
@@ -1116,17 +1309,17 @@ Debug("nisse - DCAF.CombatAirPatrol:EvaluateCluster :: processing TGT: " .. tgtG
 -- Debug("nisse - DCAF.CombatAirPatrol:EvaluateCluster_findSupport :: availableCaps: " .. toString(availableCaps, function(i) return i.Name end))
         for _, cap in ipairs(availableCaps) do
             considerSupportCAP(cap)
-            if ratio >= capInfo.MinimumAttackRatio then return true end
+            if ratio >= capInfo.Manager.MinimumAttackRatio then return true end
         end
     end
 
-    if ratio >= capInfo.MinimumAttackRatio or findSupport() then
+    if ratio >= self.MinimumAttackRatio or findSupport() then
         self:ExecuteOffensiveStrategy(caps, tgtGroup, cluster)
     else
         local threat = DCAF.AirThreat:New(
-            capInfo._eval.ThreatSum,
             capInfo._eval.ThreatUnitCount,
-            capInfo._eval.ThreatGroups
+            capInfo._eval.ThreatGroups,
+            capInfo._eval.ThreatSum
         )
         Debug(self.Name .. " :: cannot engage cluster. CAP is numerically inferior")
         self:_onSuperiorThreat(caps, threat)
@@ -1147,17 +1340,10 @@ end
 function DCAF.CombatAirPatrol:OnSuperiorThreat(airGroups, threat)
     -- NOTE -- this function is 
     for _, airGroup in ipairs(airGroups) do
-Debug("nisse - DCAF.CombatAirPatrol:OnSuperiorThreat // scram :: airGroup: " .. DumpPretty(airGroup))
+-- Debug("nisse - DCAF.CombatAirPatrol:OnSuperiorThreat // scram :: airGroup: " .. DumpPretty(airGroup))
         local capinfo = GetCAPInfo(airGroup)
-        Scram(capinfo)
+        delouseOrScramCAP(capinfo, threat)
     end
 end
-
-DCAF.CombatAirPatrol._main_menu = GM_Menu:AddMenu(_codeword)
-DCAF.CombatAirPatrol._start_menu = DCAF.CombatAirPatrol._main_menu:AddCommand("Start", function()
-    local tts
-    if DCAF.TTSChannel then tts = DCAF.TTSChannel:New() end
-    DCAF.CombatAirPatrol:Start(tts)
-end)
 
 Trace("\\\\\\\\\\ DCAF.CombatAirPatrol.lua was loaded //////////")
