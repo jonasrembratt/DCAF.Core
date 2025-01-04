@@ -25,6 +25,7 @@ local TTSChannel_DEFAULTS = {
     Callsign = "TOP DOG",
     Coalition = Coalition.Blue,
     MGRS_OmitMapComponent = false,
+    UnitsDistance = DCAF.Units.Imperial,
     _variables = {}
 }
 
@@ -107,6 +108,7 @@ DCAF.TTSChannel = {
     Gender = "female",
     Culture = "en-US",
     Coalition = TTSChannel_DEFAULTS.Coalition,
+    UnitsDistance = TTSChannel_DEFAULTS.UnitsDistance,
     Interval = 1 -- Minutes(1) -- ensures no message gets sent less than this interval from the last one
 }
 
@@ -137,14 +139,14 @@ local function resolveFreqAndMod(frequency, modulation)
 end
 
 --- Creates, initializes, and returns a new #DCAF.TTSChannel
--- @param #string callsign - (optional; default = 'TOP DOG') Specifies the channel callsign
--- @param #Any frequency - (optional; default = 357.000) Specifies the frequency for the channel. Number (frequency) -or- a #DCAF.Frequency; if the latter modulation can also be passed in that object
--- @param #number modulation - (optional; default = radio.modulation.AM) Specifies the modulation for the channel
--- @param #number coalition - (optional; default = coalition.side.BLUE) Specifies the modulation for the channel
-function DCAF.TTSChannel:New(callsign, frequency, modulation, coalition)
+--- @param callSign string (optional) [default = 'TOP DOG'] Specifies the channel call sign
+--- @param frequency number (optional [default = 357.000] Specifies the frequency for the channel. Number (frequency) -or- a #DCAF.Frequency; if the latter modulation can also be passed in that object
+--- @param modulation number (optional) [default = radio.modulation.AM] Specifies the modulation for the channel
+--- @param coalition number (optional) [default = coalition.side.BLUE] Specifies the modulation for the channel
+function DCAF.TTSChannel:New(callSign, frequency, modulation, coalition)
     local freq, mod = resolveFreqAndMod(frequency, modulation)
     local channel = DCAF.clone(DCAF.TTSChannel)
-    initTTSChannel(channel, callsign, freq, mod, coalition)
+    initTTSChannel(channel, callSign, freq, mod, coalition)
     return channel
 end
 
@@ -153,13 +155,54 @@ end
 -- @param #string value - value to be assigned to variable (eg. "COURTSIDE")
 function DCAF.TTSChannel.InitDefaultVariable(name, value)
     TTSChannel_DEFAULTS._variables[name] = value
+    return DCAF.TTSChannel
 end
 
 --- Creates a variable to be recognized in transmissions
 -- @param #string name - name of variable (eg. "IDO")
 -- @param #string value - value to be assigned to variable (eg. "COURTSIDE")
 function DCAF.TTSChannel:InitVariable(name, value)
+    Debug("DCAF.TTSChannel:InitVariable :: Frequency: " .. Dump(self.Frequency) .. " :: name: " .. Dump(name) .. " :: value: " .. Dump(value))
     self._variables[name] = value
+Debug("nisse - DCAF.TTSChannel:InitVariable :: ._variables: " .. DumpPretty(self._variables))
+    return self
+end
+
+--- Returns value of a specified variable, if any; otherwise nil
+---@param name string Name of requested variable
+---@return unknown Value of requested variable, or nil if variable is undefined.
+function DCAF.TTSChannel:GetVariableValue(name)
+    local value = self._variables[name]
+    if value then return value end
+    return TTSChannel_DEFAULTS._variables[name]
+end
+
+--- Creates/sets a "FLIGHT" variable with the identity to be used for that flight, to be recognized in transmissions. This is a neat way to be able to reference in-game flight callsigns.
+---@param flightIdentity string 
+---@param index number (optional) Specifies the flight number (1..n). Can be any number but only positive numbers makes sense
+---@return self object Returns self (#DCAF.TTSChannel)
+function DCAF.TTSChannel:InitFlightVariable(flightIdentity, index)
+    Debug("DCAF.TTSChannel:InitFlightVariable :: identity: " .. Dump(flightIdentity) .. " :: index: " .. Dump(index))
+    if not isAssignedString(flightIdentity) then return Error("DCAF.TTSChannel:InitFlightCallSign ::  `callSign` must be assigned string, but was: " .. DumpPretty(flightIdentity), self) end
+    local variableName = "FLIGHT"
+    if isNumber(index) then variableName = variableName .. "-" .. index end
+    return self:InitVariable(variableName, flightIdentity)
+end
+
+--- Sets the units (#DCAF.Units) used for expressing distance
+-- @param #DCAF.Units unit - the unit to be used for expressing distance
+function DCAF.TTSChannel:InitUnitsDistance(unit)
+    if not isUnits(unit) then return Error("DCAF.TTSChannel:InitUnitsDistance :: `units` must be #DCAF.Units, but was: " .. DumpPretty(unit)) end
+    self.UnitsDistance = unit
+    return self
+end
+
+--- Sets the default units (#DCAF.Units) used for expressing distance, for all TTSChannel objects
+-- @param #DCAF.Units unit - the unit to be used for expressing distance
+function DCAF.TTSChannel:InitDefaultUnitsDistance(unit)
+    if not isUnits(unit) then return Error("DCAF.TTSChannel:InitDefaultUnitsDistance :: `units` must be #DCAF.Units, but was: " .. DumpPretty(unit)) end
+    TTSChannel_DEFAULTS.UnitsDistance = unit
+    return self
 end
 
 --- Tunes a frequency/modulation. Current frequency can be restored with Detune()
@@ -276,7 +319,8 @@ end
 -- @param #string text - The textual message to be transmitted
 function DCAF.TTSChannel:Message(text, callsign, isActual, dash, isReplay)
 
-Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
+    Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
+Debug("nisse - DCAF.TTSChannel:Message :: self._variables: " .. DumpPretty(self._variables))
 
     if not isAssignedString(text) then
         return Error("DCAF.TTSChannel:Message :: `text` must be assigned string, but was: " .. DumpPretty(text)) end
@@ -284,7 +328,7 @@ Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
     local function substituteVariables()
         callsign = callsign or self.Callsign
         if self:IsActual() then
-            callsign = callsign .. " Actual"
+            callsign = callsign .. " Actual"    
         end
         text = string.gsub(text, "%[CALLSIGN%]", callsign)
         local greeting = self:GetGreetingPhrase()
@@ -350,10 +394,43 @@ Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
         return out
     end
 
+    local function verbalDistanceThousands(distance, unit) -- todo Consider moving to DCAF.Core
+        local thousands = math.floor(distance / 1000)
+        local single = distance - thousands*1000
+        local token = tostring(thousands) .. " tousand"
+        if single < 100 then
+            token = tostring(single)
+        else
+            token = token .. tostring(single / 100) .. " hundred"
+        end
+        return token .. unit
+    end
+
+    local function verbalDistance(distanceMeters)  -- todo Consider moving to DCAF.Core
+        if not isNumber(distanceMeters) then return Error("verbalDistance :: `distanceMeters` must be number, but was: " .. DumpPretty(distanceMeters), "ERROR") end
+        if self.UnitsDistance == DCAF.Units.Metric then
+            distanceMeters = math.floor(distanceMeters)
+            if distanceMeters < 3000 then
+                return PhoneticAlphabet:ConvertNumber(distanceMeters, PhoneticAlphabet.NumericPrecision.Ten) .. " meters"
+            else
+                local km = math.floor(distanceMeters / 1000)
+                return tostring(km) .. " clicks"
+            end
+        elseif self.UnitsDistance == DCAF.Units.Imperial then
+            local distanceFeet = math.floor(UTILS.MetersToFeet(distanceMeters))
+            if distanceFeet < 5000 then
+                return PhoneticAlphabet:ConvertNumber(distanceFeet, PhoneticAlphabet.NumericPrecision.Ten) .. " feet"
+            else
+                return tostring(UTILS.MetersToNM(distanceMeters))
+            end
+        end
+    end
+
     local function substituteLocations()
         local KEYPAD_QUALIFIER = 'kp'
         local MGRS_QUALIFIER = 'gd'
         local BULLSEYE_QUALIFIER = 'be'
+        local REFERENCE_POINT_QUALIFIER = 'rp'
         -- todo consider supporting 'be' (bullseye)
         local TERMINATOR = ']'
 
@@ -364,7 +441,10 @@ Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
                 if not s then
                     s = string.find(text, BULLSEYE_QUALIFIER.."%[")
                     if not s then
-                        return
+                        s = string.find(text, REFERENCE_POINT_QUALIFIER.."%[")
+                        if not s then
+                            return
+                        end
                     end
                 end
             end
@@ -372,9 +452,25 @@ Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
             if e then return s, string.sub(text, s, s+1), e end
         end
 
-        local function getCoordinate(ident)
-            local l = DCAF.Location.Resolve(ident)
-            if l then return l:GetCoordinate() end
+        local function getCoordinatesAndIdentifiers(ident)
+            if not string.find(ident, "//") then
+                local l = DCAF.Location.Resolve(ident)
+                if l then return { l:GetCoordinate() }, { ident } end
+            end
+
+            local coordinates = {}
+            local identifiers = {}
+            local idents = stringSplit(ident, "//")
+            for _, ident in ipairs(idents) do
+                ident = stringTrim(ident)
+
+                local l = DCAF.Location.Resolve(ident)
+                if l then
+                    coordinates[#coordinates+1] = l:GetCoordinate()
+                    identifiers[#identifiers+1] = ident
+                end
+            end
+            return coordinates, identifiers
         end
 
         local s, q, e = findLocation()
@@ -388,42 +484,60 @@ Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
 
         while s and q and e do
             local ident = string.sub(text, s+string.len(q)+1, e-1)
-            local coord = getCoordinate(ident)
-            if coord then
-                local kp
+            local coordinates, identifiers = getCoordinatesAndIdentifiers(ident)
+
+            if coordinates then
+                local token
                 local omitMapElement = self.MGRS_OmitMapComponent or TTSChannel_DEFAULTS.MGRS_OmitMapComponent
                 if q == KEYPAD_QUALIFIER then
                     -- local map, grid, keypad = coord:ToKeypad()
+                    local coord = coordinates[1]
                     local keypad = coord:ToKeypad()
                     if not keypad then
-                        kp = "KEYPAD ERROR"
+                        token = "KEYPAD ERROR"
                     elseif not omitMapElement then
-                        kp = "Grid! " .. PhoneticAlphabet:Convert(keypad.Map .. " " .. keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
+                        token = "Grid! " .. PhoneticAlphabet:Convert(keypad.Map .. " " .. keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
                     else
-                        kp = "Grid! " .. PhoneticAlphabet:Convert(keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
+                        token = "Grid! " .. PhoneticAlphabet:Convert(keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
                     end
                 elseif q == MGRS_QUALIFIER then
+                    local coord = coordinates[1]
                     local mgrs = coord:ToMGRS()
-Debug("nisse - DCAF.TTSChannel_substituteLocations :: map: " .. DumpPretty(mgrs))
                     if not mgrs then
-                        kp = "GRID ERROR"
+                        token = "GRID ERROR"
                     elseif not omitMapElement then
-                        kp = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Map .. " " .. mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, true)
-                        kp = kp .. " elevation " .. PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), true)
+                        token = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Map .. " " .. mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, true)
+                        token = token .. " elevation " .. PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), true)
                     else
-                        kp = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, true)
-                        kp = kp .. " elevation " .. PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), true)
+                        token = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, true)
+                        token = token .. " elevation " .. PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), true)
                     end
                 elseif q == BULLSEYE_QUALIFIER then
+                    local coord = coordinates[1]
                     local bearing, distanceNM, name = DCAF.GetBullseye(coord, self.Coalition)
                     if bearing then 
-                        kp = name .. ". " .. PhoneticAlphabet:Convert(tostring(UTILS.Round(bearing))) .. ". " .. UTILS.Round(distanceNM)
+                        token = name .. ". " .. PhoneticAlphabet:Convert(tostring(UTILS.Round(bearing))) .. ". " .. UTILS.Round(distanceNM)
                     else
-                        kp = "BULLSEYE ERROR"
+                        token = "BULLSEYE ERROR"
+                    end
+                elseif q == REFERENCE_POINT_QUALIFIER then
+                    if #coordinates < 2 or not identifiers then
+                        token = "RP ERROR (expected 2 identifiers)"
+                    else
+                        local coordRP = coordinates[1]
+                        local coordLoc = coordinates[2]
+                        local heading = coordRP:HeadingTo(coordLoc)
+                        if heading < 100 then
+                            heading = '0'..tostring(math.floor(heading))
+                        else
+                            heading = tostring(math.floor(heading))
+                        end
+                        local distanceMeters = coordRP:Get2DDistance(coordLoc)
+                        token = "Reference " .. identifiers[1] .. ". " .. PhoneticAlphabet:Convert(heading) .. ". " .. verbalDistance(distanceMeters)
                     end
                 end
-                if kp then
-                    out = out .. kp
+                if token then
+                    out = out .. token
                     text = string.sub(text, e+1)
                 end
                 s, q, e = findLocation()
@@ -669,6 +783,65 @@ function DCAF.TTSChannel:AddToMsgLog(text, callsign, isActual, dash)
     msg.IsActual = isActual
     table.insert(self.MsgLog, 1, msg)
     return msg
+end
+
+DCAF.TTSChannel.Call = {
+    ClassName = "DCAF.TTSChannel.Call",
+    ---
+    Channel = nil,      -- #DCAF.TTSChannel
+    Message = "",       -- message to be sent
+    Seconds = 0,        -- estimated time needed for transmission
+    SchedulerID = nil   -- Scheduler (delay) ID, once call has been scheduled for transmission
+}
+
+function DCAF.TTSChannel.Call:New(ttsChannel, message, seconds, id, funcCallback)
+    if not isClass(ttsChannel, DCAF.TTSChannel) then return Error("DCAF.TTSChannel.Call:New :: `ttsChannel` must be of type #" .. DCAF.TTSChannel.ClassName .. ", but was: " .. DumpPretty(ttsChannel)) end
+    if not isAssignedString(message) then return Error("DCAF.TTSChannel.Call:New :: `message` must be assigned string, but was: " .. DumpPretty(message)) end
+    if not isNumber(seconds) or seconds < 1 then seconds = 10 end
+    if funcCallback and not isFunction(funcCallback) then return Error("DCAF.TTSChannel.Call:New :: `funcCallback` must be function, but was: " .. DumpPretty(funcCallback)) end
+    local call = DCAF.clone(DCAF.TTSChannel.Call)
+    call.Channel = ttsChannel
+    call.Message = message
+    call.Seconds = seconds
+    call.ID = id
+    call.Callback = funcCallback
+    return call
+end
+
+DCAF.TTSChannel.CallSequence = {
+    ClassName = "DCAF.TTSChannel.CallSequence",
+    ----
+    Calls = {}          -- list of #DCAF.TTSChannel.Call
+}
+
+function DCAF.TTSChannel.CallSequence:New(...)
+    if not isListOfClass(arg, DCAF.TTSChannel.Call) then return Error("DCAF.TTSChannel.CallSequence :: arguments must be list of calls (#" .. DCAF.TTSChannel.Call.ClassName.."), but was: " .. DumpPretty(arg)) end
+    local seq = DCAF.clone(DCAF.TTSChannel.CallSequence)
+    for index, call in ipairs(arg) do
+        if not call.ID then call.ID = index end
+        seq.Calls[index] = call
+    end
+    return seq
+end
+
+function DCAF.TTSChannel.CallSequence:Execute()
+    local delay = 0
+    for _, call in ipairs(self.Calls) do
+        call.SchedulerID = DCAF.delay(function()
+            call.Channel:Send(call.Message)
+            call.SchedulerID = nil
+            if call.Callback then pcall(function() call.Callback(call) end) end
+        end, delay)
+        delay = delay + call.Seconds
+    end
+    return self
+end
+
+function DCAF.TTSChannel.CallSequence:Cancel()
+    for _, call in ipairs(self.Calls) do
+        if call.SchedulerID then pcall(function() DCAF.stopScheduler(call.SchedulerID) end) end
+    end
+    return self
 end
 
 Trace("\\\\\\\\\\ DCAF.TTSChannel.lua was loaded //////////")

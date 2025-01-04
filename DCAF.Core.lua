@@ -420,6 +420,33 @@ function getRefPoint(source, coalition)
 -- error("NOT IMPLEMENTED")
 end
 
+--- Returns the unit of a group that is closest to a specified location
+---@param group any Can be #GROUP, #UNIT, or name of group/unit. Must be resolvable to a #GROUP
+---@param location any Can be anything that can be resolved into a #DCAF.Location
+---@return closestUnit object The closest unit
+---@return closestDistance number The distance between the closest unit and `location`
+function getGroupClosestUnit(group, location)
+    local validGroup = getGroup(group)
+    if not validGroup then return Error("getGroupClosestUnit :: could not resolve `group`: " .. DumpPretty(group)) end
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return Error("getGroupClosestUnit :: could not resolve `location`: " .. DumpPretty(location)) end
+    group = validGroup
+    local coordLocation = validLocation:GetCoordinate()
+    local units = group:GetUnits()
+    local closestUnit
+    local closestDistance = NauticalMiles(9999)
+    local function measure(unit)
+        local coordUnit = unit:GetCoordinate()
+        if not coordUnit then return end
+        local distance = coordUnit:Get2DDistance(coordLocation)
+        if distance > closestDistance then return end
+        closestDistance = distance
+        closestUnit = unit
+    end
+    for _, unit in ipairs(units) do measure(unit) end
+    return closestUnit, closestDistance
+end
+
 function getZone( source )
     if isZone(source) then
         return source end
@@ -1154,7 +1181,7 @@ PhoneticAlphabet = {
         ["2"] = "Two",
         ["3"] = "Tree",
         ["4"] = "Four",
-        ["5"] = "Five",
+        ["5"] = "Fife",
         ["6"] = "Six",
         ["7"] = "Seven",
         ["8"] = "Eight",
@@ -1274,6 +1301,25 @@ Debug("nisse - PhoneticAlphabet:ConvertNumber :: teens :: number: " .. Dump(numb
         end
     end
     return s
+end
+
+function PhoneticAlphabet:ConvertFrequencyNumber(number, decimalPositions)
+    if not isNumber(number) then return Error("PhoneticAlphabet:ConvertFrequencyNumber :: `number` must be numeric value, but was: " .. DumpPretty(number), tostring(number)) end
+    local integer = math.floor(number)
+    local decimals = number - integer
+    local integerText = self:Convert(tostring(integer))
+    local decimalText = string.sub(tostring(decimals), 3)
+    if isNumber(decimalPositions) then
+        while decimalPositions > string.len(decimals) do
+            decimalText = decimalText .. "0"
+        end
+    end
+    if string.len(decimalText) > 0 then
+        decimalText = self:Convert(decimalText)
+    else
+        decimalText = self:Convert("0")
+    end
+    return integerText .. " decimal " .. decimalText
 end
 
 function DCAF.trimInstanceFromName( name, qualifierAt )
@@ -1404,10 +1450,12 @@ function DCAF.stopScheduler(id, bRemove)
     if not id then
         return Error("DCAF.stopScheduler :: `id` should be number, but was: " .. Dump(id)) end
 
-    DCAF.Scheduler:Stop(id)
-    if not isBoolean(bRemove) or bRemove then
-        DCAF.Scheduler:Remove(id)
-    end
+    pcall(function()
+        DCAF.Scheduler:Stop(id)
+        if not isBoolean(bRemove) or bRemove then
+            DCAF.Scheduler:Remove(id)
+        end
+    end)
 end
 
 function isGroupNameInstanceOf( name, templateName )
@@ -3424,6 +3472,21 @@ function DCAF.ClosestUnits:Any()
     return self.Count > 0
 end
 
+function DCAF.ClosestUnits:AnyPlayer()
+    if not self:Any() then return end
+    for _, info in ipairs(self.Units) do
+        local unit = info.Unit
+Debug("nisse - DCAF.ClosestUnits:AnyPlayer :: unit:IsPlayer(): " .. Dump(unit:IsPlayer()))
+        if unit:IsPlayer() then return true end
+    end
+end
+
+function DCAF.ClosestUnits:First()
+    if self.Count == 0 then return end
+    local info = self.Units[1]
+    return info.Unit, info.Distance
+end
+
 function DCAF.ClosestUnits:Set(unit, distance)
     self.Units[#self.Units+1] = { Unit = unit, Distance = distance, DistanceNM = UTILS.MetersToNM(distance) }
     self.Count = self.Count+1
@@ -3542,10 +3605,12 @@ function ScanAirborneUnits(location, range, coalition, breakOnFirst, measureSlan
         return closestUnits
     end
     local location = validLocation
+    if not isNumber(range) or range < 1 then return Error("ScanAirborneUnits :: `range` must be positive number, but was: " .. DumpPretty(range), closestUnits) end
     if not isBoolean(ignoreOwn) then ignoreOwn = true end
     if not isBoolean(ignoreAI) then ignoreAI = false end
 
     local coordinate = location:GetCoordinate()
+    if not coordinate then return Error("ScanAirborneUnits :: cannot get coordinate from location: " .. location.Name, closestUnits) end
     local skip
     if ignoreOwn and location:IsGroup() or location:IsUnit() then
         skip = { location.Source }
@@ -3563,6 +3628,7 @@ function ScanAirborneUnits(location, range, coalition, breakOnFirst, measureSlan
         else
             distance = coordinate:Get2DDistance(coordUnit)
         end
+-- Debug("nisse - ScanAirborneUnits :: unit: " .. unit.UnitName .. " :: range: " .. Dump(range) .. " :: distance: " .. Dump(distance))
         if distance > 0 and distance <= range then
             return true, distance
         end
@@ -5686,14 +5752,66 @@ function FeintAttackEvent:New(iniUnit, tgtUnit)
     return obj
 end
 
-function FeintAttackEvent:Deactivate()
-    local group = self.IniGroup
+--- Ends the Feint Attack. Please note the "feint attacking" group will not be affected, which will mean it is likely to initiate lethal attacks. Please call FeintAttackEvent:Deactivate to prevent that 
+function FeintAttackEvent:End()
+    Debug("FeintAttackEvent:End :: " .. self.IniGroupName)
+    if self.IsEventEnded then return self end
+    self.IsEventEnded = true
+    self.IniGroup:UnHandleEvent(EVENTS.Shot)
+    return self
+end 
+
+--- Deactivates the 'feint attacking' group; leaving it in a pacified state. For ground/naval units emission is turned off. Air unirs are set to ROE="Hold Fire". Calling this function will also end the feint attack, unless a 'false' value is passed in
+--- @param endEvent boolean (optional) [default=true] Will also automatically end the Feint Attack (see FeintAttackEvent:End())
+function FeintAttackEvent:Deactivate(endEvent)
+    local iniGroup = self.IniGroup
+    if endEvent == nil then endEvent = true end
     Debug("FeintAttackEvent:Deactivate :: " .. self.IniGroupName)
-    if group:IsGround() or group:IsShip() then
-        group:OptionAlarmStateGreen()
-    elseif group:IsAir() then
-        group:OptionROEHoldFire()
+    if iniGroup:IsGround() or iniGroup:IsShip() then
+        iniGroup:EnableEmission(false) -- OptionAlarmStateGreen()
+    elseif iniGroup:IsAir() then
+        iniGroup:OptionROEHoldFire()
     end
+    if endEvent then return self:End() end
+    return self
+end
+
+local DCAF_FeintAttackInfo = {
+    ClassName = "DCAF_FeintAttackInfo",
+    ----
+    Group = nil,
+    Name = nil,
+    _funcDone = nil,
+    _hasEnded = false
+}
+
+function DCAF_FeintAttackInfo:End(event)
+    if self._hasEnded then return end
+    self._hasEnded = true
+    local group = self.Group
+    if not group then return Error("DCAF_FeintAttackInfo:End :: no Group available", self) end
+    local coord = group:GetCoordinate()
+    if not coord then
+        -- group no longer alive 
+        self._hasEnded = true
+        return self
+    end
+
+    event = event or FeintAttackEvent:New(group:GetUnit(1))
+    event:End()
+    local funcDone = self._funcDone
+    if funcDone ~= nil and isFunction(funcDone) then
+        pcall(function()
+            funcDone(event)
+        end)
+    end
+    return self, event
+end
+
+function DCAF_FeintAttackInfo:EndAndDeactivate()
+    local _, event = self:End()
+    event:Deactivate()
+    return self
 end
 
 --- Makes a group appear to attack but weapons are immediately neutralized, emulating provocation or signalling "final warning" etc.
@@ -5704,63 +5822,79 @@ end
 --- @param funcDone function - (optional) function to be called back when all feint attacks are complete
 --- @param funcEvent function - (optional) function to be called back for each feint attack (see max)
 function FeintAttack(group, maxShots, shootAllowance, maxTime, funcDone, funcEvent)
+    Debug("FeintAttack :: maxShots: " .. Dump(maxShots) .. " :: shootAllowance: " .. Dump(shootAllowance) .. " :: maxTime: " .. Dump(maxTime) .. " :: funcDone: " .. Dump(funcDone) .. " :: funcEvent: " .. Dump(funcEvent))
     local validGroup = getGroup(group)
     if not validGroup then return Error("FeintAttack :: could not resolve a group from: " .. DumpPretty(group)) end
-    if not validGroup:IsActive() then return Error("FeintAttack :: group was not active: " .. validGroup.GroupName) end
-    validGroup:OptionAlarmStateRed()
-    validGroup:OptionROEOpenFire()
+    group = validGroup
+    Debug("FeintAttack :: group: " .. group.GroupName)
+    if not group:IsActive() then return Error("FeintAttack :: group was not active: " .. group.GroupName) end
+    local feintAttack = group._dcaf_feintAttack
+    if feintAttack then feintAttack:End() end
+    group:EnableEmission(true)
+    group:OptionAlarmStateRed()
+    group:OptionROEOpenFire()
 
-    local maxShots
     local countShots = 0
     local endTime
-    local hasEnded
 
-    local function endFeintAttack(feintAttackObject)
-Debug("nisse - FeintAttack :: ends :: " .. group.GroupName .. " :: hasEnded: " .. Dump(hasEnded))
-        validGroup:UnHandleEvent(EVENTS.Shot)
-        if hasEnded then return end
-        hasEnded = true
-        if isFunction(funcDone) then
-            pcall(function()
-                funcDone(feintAttackObject)
-            end)
-            return
-        end
-        validGroup:OptionAlarmStateAuto()
-        validGroup:OptionROEHoldFire()
+    feintAttack = DCAF.clone(DCAF_FeintAttackInfo)
+    feintAttack.Group = group
+    feintAttack._funcDone = funcDone
+    group._dcaf_feintAttack = feintAttack
+
+    if not isNumber(maxShots) then
+        maxShots = 0
+        group:OptionROEHoldFire()
     end
-
-    if not isNumber(maxShots) then maxShots = 1 end
     if isNumber(maxTime) and maxTime > 1 then
 Debug("nisse - FeintAttack :: sets timeout to " .. maxTime .. " seconds")
         endTime = UTILS.SecondsOfToday() + maxTime
         DCAF.delay(function()
 Debug("nisse - FeintAttack :: times out :: group: " .. group.GroupName)
-            endFeintAttack()
+            feintAttack:End()
+            -- endFeintAttack()
         end, maxTime)
     end
     if not shootAllowance then shootAllowance = 0 end
     if shootAllowance == true then shootAllowance = 0.2 end
 
-    validGroup:HandleEvent(EVENTS.Shot, function(_, e)
-        local feintAttackObject = FeintAttackEvent:New(e.IniUnit, e.TgtUnit)
+Debug("nisse - FeintAttack :: shootAllowance: " .. shootAllowance)
+    group:HandleEvent(EVENTS.Shot, function(_, e)
+Debug("nisse - FeintAttack :: SHOT event :: e: " .. DumpPretty(e))
+
+        local event = FeintAttackEvent:New(e.IniUnit, e.TgtUnit)
         local weapon = e.weapon
-        DCAF.delay(function()
+
+        local function neutralizeWeapon(countAttempt)
             weapon:destroy()
-            Debug("FeintAttack :: " .. validGroup.GroupName .. " :: weapon neutralized")
+            group:EnableEmission(false)
+            Debug("FeintAttack :: " .. group.GroupName .. " :: weapon neutralized :: countAttempt: " .. (countAttempt or 1))
+            DCAF.delay(function()
+                if not event.IsEventEnded then
+                    group:EnableEmission(true)
+                end
+                local success, position = pcall(function() return weapon:getPoint() end)
+                if success then
+                    trigger.action.explosion(position, 5)
+                    Debug("FeintAttack :: " .. group.GroupName .. " :: exploded weapon")
+                end
+            end, 0.5)
+        end
+        DCAF.delay(function()
+            neutralizeWeapon()
         end, shootAllowance)
         if maxShots then
             countShots = countShots+1
             if countShots >= maxShots then
-                Debug("FeintAttack :: " .. validGroup.GroupName .. " :: max number of shots fired: " .. maxShots)
-                endFeintAttack(feintAttackObject)
+                Debug("FeintAttack :: " .. group.GroupName .. " :: max number of shots fired: " .. maxShots)
+                feintAttack:End(event)
             end
         elseif endTime and UTILS.SecondsOfToday() >= endTime then
-            Debug("FeintAttack :: " .. validGroup.GroupName .. " :: times out after " .. maxShots .. " seconds")
-            endFeintAttack(feintAttackObject)
+            Debug("FeintAttack :: " .. group.GroupName .. " :: times out after " .. maxShots .. " seconds")
+            feintAttack:End(event)
         elseif isFunction(funcEvent) then
             pcall(function()
-                funcEvent(feintAttackObject)
+                funcEvent(event)
             end)
         end
     end)
@@ -12706,6 +12840,7 @@ DCAF.WpnTracking = {
 
 DCAF.WpnTrack = {
     ClassName = "DCAF.WpnTrack",
+    ----
     ID = nil,                   -- #string - weapon's ID
     Weapon = nil,               -- DCS object - representing the tracked weapon
     Type = nil,                 -- DCS weapon type
@@ -12760,13 +12895,21 @@ local function trackWeapons()
 
     for _, wpnTrack in pairs(DCAF_WeaponTracks) do
         if wpnTrack.Weapon:isExist() then
+            local countTrackers = 0
             wpnTrack.Point = wpnTrack.Weapon:getPosition().p
             wpnTrack.Direction = wpnTrack.Weapon:getPosition().x
             wpnTrack.Velocity = wpnTrack.Weapon:getVelocity()
             for _, wpnTracker in ipairs(DCAF_WpnTrackers) do
-                wpnTracker:OnUpdate(wpnTrack)
+                if wpnTracker:IsTracking(wpnTrack) then
+                    countTrackers = countTrackers+1
+                    wpnTracker:OnUpdate(wpnTrack)
+                end
             end
-        else
+            if countTrackers == 0 then
+                Debug("DCAF.WpnTrack :: no tracker is tracking weapon '" .. wpnTrack.ID .. " [" .. wpnTrack.Type .. "] :: ends weapon track")
+                wpnTrack:End()
+            end
+        elseif not wpnTrack._isEnded then
             -- we have impact...
             local ip = land.getIP(wpnTrack.Point, wpnTrack.Direction, lookahead(wpnTrack.Velocity))  -- terrain intersection point with weapon's nose.  Only search out 20 meters though.
             local impactPoint
@@ -12779,7 +12922,9 @@ local function trackWeapons()
             wpnTrack.ImpactCoordinate = COORDINATE:New( ip.x, ip.y, ip.z )
             wpnTrack.ImpactTime = UTILS.SecondsOfToday()
             for _, wpnTracker in ipairs(DCAF_WpnTrackers) do
-                wpnTracker:OnImpact(wpnTrack)
+                if wpnTracker:IsTracking(wpnTrack) then
+                    wpnTracker:OnImpact(wpnTrack)
+                end
             end
             wpnTrack:End()
         end
@@ -12831,11 +12976,13 @@ local function newWpnTrack(event)
     wpnTrack.IniPoint = wpnTrack.Point
     wpnTrack.IniTime = UTILS:SecondsOfToday()
     wpnTrack.IniGroup = event.IniUnit:GetGroup()
+    wpnTrack.IniGroupName = wpnTrack.IniGroup.GroupName
     wpnTrack.IniUnit = event.IniUnit
     wpnTrack.IniUnitType = event.IniUnit:GetTypeName()
     wpnTrack.PlayerName = event.IniUnit:GetPlayerName()
     wpnTrack.Target = event.weapon:getTarget()
     wpnTrack.IniTgt = event.TgtUnit
+    wpnTrack.Power = getWeaponExplosive(wpnTrack.Type)
     addWpnTrack(wpnTrack)
     return wpnTrack
 end
@@ -12881,13 +13028,10 @@ function DCAF.WpnTrack:ExplodeWeapon(power)
 end
 
 function DCAF.WpnTrack:End()
+    if self._isEnded then return self end
+    self._isEnded = true
     removeTrackedWeapon(self)
 end
-
--- function DCAF.WpnTrack:OnImpact(coord)
---     Debug("DCAF.WpnTrack:OnImpact :: " .. DumpPrettyDeep(self, 2))
---     coord:CircleToAll()
--- end
 
 function DCAF.WpnTracker:New(name)
     if not isAssignedString(name) then
@@ -12903,8 +13047,7 @@ function DCAF.WpnTracker:New(name)
 end
 
 --- Starts the weapon tracker
--- @param #DCAF.WpnTracker self
--- @param #any monitor bool or number specifies whether tracker should be sent weapon trajectory updates
+--- @param monitor any bool or number specifies whether tracker should be sent weapon trajectory updates
 function DCAF.WpnTracker:Start(monitor)
     if monitor == true then
         table.insert(DCAF_WpnTrackers, self)
@@ -12915,6 +13058,43 @@ function DCAF.WpnTracker:Start(monitor)
     DCAF.WpnTracking:Start(self)
     self.IsRunning = true
     return self
+end
+
+function DCAF.WpnTracker:IgnoreIniGroups(groups)
+    if isAssignedString(groups) then 
+        return self:IgnoreIniGroups({ groups })
+    end
+    if isClass(groups, GROUP) then
+        return self:IgnoreIniGroups({ groups })
+    end
+    if isClass(groups, UNIT) then
+        return self:IgnoreIniGroups({ groups:GetGroup() })
+    end
+    if isListOfAssignedStrings(groups) then
+        local listOfGroups = {}
+        local index = self._ignoreIniGroups or {}
+        for _, name in ipairs(groups) do
+            local group = getGroup(name)
+            if group and not index[group.GroupName] then
+                listOfGroups[#listOfGroups+1] = group
+            end
+        end
+        return self:IgnoreIniGroups(listOfGroups)
+    end
+    if not isListOfClass(groups, GROUP) then return Error("DCAF.WpnTracker:IgnoreIniGroups :: `groups` could not be resolved as a list of groups", self) end
+    self._ignoreIniGroups = self._ignoreIniGroups or {}
+    local index = self._ignoreIniGroups
+    for _, group in ipairs(groups) do
+        if not index[group.GroupName] then
+            index[group.GroupName] = group
+        end
+    end
+    return self
+end
+
+function DCAF.WpnTracker:IsTracking(wpnTrack)
+    -- check for ignore initializing group...
+    return not self._ignoreIniGroups or not self._ignoreIniGroups[wpnTrack.IniGroupName]
 end
 
 --- Looks up tracker with specified name
@@ -13087,7 +13267,7 @@ DCAF.BlastDamage = {
     ClassName = "DCAF.BlastDamage",
     --
     UpdateInterval = .1,
-    WpnTracker = DCAF.WpnTracker:New("Splash Damage")
+    WpnTracker = nil -- DCAF.WpnTracker:New("Splash Damage")
 }
 
 local DCAF_Ordnance = {
@@ -13254,7 +13434,7 @@ local function explodeObject(table)
     trigger.action.explosion(point, power)
 end
 
-local function getWeaponExplosive(name)
+function getWeaponExplosive(name)
     if explTable[name] then
         return explTable[name]
     else
@@ -13376,39 +13556,42 @@ Debug(obj:getTypeName().." sa:"..surface_area.." distance:"..surface_distance.."
     end
 end
 
-function DCAF.BlastDamage.WpnTracker:OnImpact(wpnTrack)
-    if not wpnTrack._blastDamageExplosion or wpnTrack._blastDamageExplosion == 0 then
-        return end
+function DCAF.BlastDamage:_initWpnTracker()
 
-    local options = DCAF.BlastDamage.Options
-    local impactPoint = wpnTrack.ImpactCoordinate
-    local explosive = wpnTrack._blastDamageExplosion -- getWeaponExplosive(wpnTrack.Type)
-    if options.LargerExplosions == true then
-        trigger.action.explosion(impactPoint, explosive)
-    end
-    if options.RocketMultiplier > 0 and wpnTrack.Weapon.cat == Weapon.Category.ROCKET then
-        explosive = explosive * options.RocketMultiplier
-    end
-    blastWave(impactPoint, options.BlastSearchRadius, wpnTrack.Weapon.ordnance, explosive)
-end
-
-function DCAF.BlastDamage.WpnTracker:OnUpdate(wpnTrack)
--- Debug("DCAF.BlastDamage.WpnTracker:OnUpdate (aaa) :: wpn: '" .. wpnTrack.Type .. "' :: _blastDamageExplosion: " .. Dump(wpnTrack._blastDamageExplosion))
-    if wpnTrack._blastDamageExplosion then
-        return
-    else
-        -- ensure we do not track trajectories for unsupported ordnance...
-        wpnTrack._blastDamageExplosion = getWeaponExplosive(wpnTrack.Type)
-        if wpnTrack._blastDamageExplosion then
-            wpnTrack._blastDamageExplosion = wpnTrack._blastDamageExplosion * DCAF.BlastDamage.Options.GlobalMultiplier
-        end
-
--- Debug("DCAF.BlastDamage.WpnTracker:OnUpdate (bbb) :: wpn: '" .. wpnTrack.Type .. "' :: _blastDamageExplosion: " .. Dump(wpnTrack._blastDamageExplosion))
-        if wpnTrack._blastDamageExplosion > 0 then
+    function DCAF.BlastDamage.WpnTracker:OnImpact(wpnTrack)
+        if not wpnTrack._blastDamageExplosion or wpnTrack._blastDamageExplosion == 0 then
             return end
-
-        Debug("DCAF.BlastDamage.WpnTracker:OnUpdate :: ordnance '" .. wpnTrack.Type .. "' is not supported :: tracking ends")
-        self:EndUpdate()
+    
+        local options = DCAF.BlastDamage.Options
+        local impactPoint = wpnTrack.ImpactCoordinate
+        local explosive = wpnTrack._blastDamageExplosion -- getWeaponExplosive(wpnTrack.Type)
+        if options.LargerExplosions == true then
+            trigger.action.explosion(impactPoint, explosive)
+        end
+        if options.RocketMultiplier > 0 and wpnTrack.Weapon.cat == Weapon.Category.ROCKET then
+            explosive = explosive * options.RocketMultiplier
+        end
+        blastWave(impactPoint, options.BlastSearchRadius, wpnTrack.Weapon.ordnance, explosive)
+    end
+    
+    function DCAF.BlastDamage.WpnTracker:OnUpdate(wpnTrack)
+    -- Debug("DCAF.BlastDamage.WpnTracker:OnUpdate (aaa) :: wpn: '" .. wpnTrack.Type .. "' :: _blastDamageExplosion: " .. Dump(wpnTrack._blastDamageExplosion))
+        if wpnTrack._blastDamageExplosion then
+            return
+        else
+            -- ensure we do not track trajectories for unsupported ordnance...
+            wpnTrack._blastDamageExplosion = wpnTrack.Power
+            if wpnTrack._blastDamageExplosion then
+                wpnTrack._blastDamageExplosion = wpnTrack._blastDamageExplosion * DCAF.BlastDamage.Options.GlobalMultiplier
+            end
+    
+    -- Debug("DCAF.BlastDamage.WpnTracker:OnUpdate (bbb) :: wpn: '" .. wpnTrack.Type .. "' :: _blastDamageExplosion: " .. Dump(wpnTrack._blastDamageExplosion))
+            if wpnTrack._blastDamageExplosion > 0 then
+                return end
+    
+            Debug("DCAF.BlastDamage.WpnTracker:OnUpdate :: ordnance '" .. wpnTrack.Type .. "' is not supported :: tracking ends")
+            self:EndUpdate()
+        end
     end
 end
 
@@ -13423,6 +13606,8 @@ function DCAF.BlastDamage.Start(options)
     else
         DCAF.BlastDamage.Options = options
     end
+    DCAF.BlastDamage.WpnTracker = DCAF.WpnTracker:New("Blast Damage")
+    DCAF.BlastDamage:_initWpnTracker()
     DCAF.BlastDamage.WpnTracker:Start(DCAF.BlastDamage.UpdateInterval)
     Trace(DCAF.BlastDamage.ClassName .. " :: started :: options: " .. DumpPretty(DCAF.BlastDamage.Options))
 end
