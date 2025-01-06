@@ -61,7 +61,6 @@ function DCAF.Story:_start(delay)
     if self._isStarted then return self end
 
     local function doStart()
-Debug("nisse - DCAF.Story:Start :: ._startFunc: " .. Dump(self._startFunc))
         if not self._startFunc then
             self._isStarted = true
             return self:OnStarted()
@@ -99,12 +98,12 @@ Debug("nisse - DCAF.Story:Start :: ._startFunc: " .. Dump(self._startFunc))
 end
 
 function DCAF.Story:_end(delay)
+    Debug("DCAF.Story:_end :: delay: " .. Dump(delay))
     if self._isEnded then return self end
     local function doEnd()
-Debug("nisse - DCAF.Story:End :: delay: " .. Dump(delay))
         if not self._endFunc then
             self._isEnded = true
-            return self:OnEnded() 
+            return self:OnEnded()
         end
         local args = {}
         if self._endFuncArg then
@@ -161,14 +160,13 @@ end
 
 --- Registers a function to be used when the story is to start. This function will be invoked internally by the :Start function
 function DCAF.Story:OnStart(func, ...)
-Debug("nisse - DCAF.Story:OnStart :: func: " .. DumpPretty(func))
+    Debug("DCAF.Story:OnStart :: func: " .. DumpPretty(func))
     if not isFunction(func) then
         Error("DCAF.Story:OnStart :: `func` must be function, but was: " .. DumpPretty(func))
         return self
     end
     self._startFunc = func
     self._startFuncArg = arg
-Debug("nisse - DCAF.Story:OnStart :: ._startFunc: " .. DumpPretty(self._startFunc))
     return self
 end
 
@@ -178,14 +176,13 @@ end
 
 --- Registers a function to be used when the story is end. This function will be invoked internally by the :End function
 function DCAF.Story:OnEnd(func, ...)
-Debug("nisse - DCAF.Story:OnEnd :: func: " .. DumpPretty(func))
+    Debug("DCAF.Story:OnEnd :: func: " .. DumpPretty(func))
     if not isFunction(func) then
         Error("DCAF.Story:OnEnd :: `func` must be function, but was: " .. DumpPretty(func))
         return self
     end
     self._endFunc = func
     self._endFuncArg = arg
-Debug("nisse - DCAF.Story:OnEnd :: ._endFunc: " .. DumpPretty(self._endFunc))
     return self
 end
 
@@ -490,7 +487,7 @@ end
 
 function DCAF.StoryStarter:_startNext()
     local story = self.Stories[self._index]
-Debug("nisse - DCAF.StoryStarter:_startNext :: story: " .. tostring(story))
+-- Debug("nisse - DCAF.StoryStarter:_startNext :: story: " .. tostring(story))
     if not story then return self end
     local startedStory = story:Start()
     if not startedStory then
@@ -515,7 +512,7 @@ Debug("nisse - DCAF.StoryStarter:_startNext :: story: " .. tostring(story))
         self._startNextTime = nextStory._startTime
         local now = UTILS.SecondsOfToday()
         local delay = nextStory._startTime - now
-Debug("nisse - DCAF.StoryStarter:_startNext :: next story starts " .. UTILS.SecondsToClock(nextStory._startTime) .. " :: delay:" .. delay .. " :: story: " .. tostring(nextStory))
+-- Debug("nisse - DCAF.StoryStarter:_startNext :: next story starts " .. UTILS.SecondsToClock(nextStory._startTime) .. " :: delay:" .. delay .. " :: story: " .. tostring(nextStory))
         self._startNextScheduleID = DCAF.delay(function()
             self:_startNext()
         end, delay)
@@ -539,3 +536,76 @@ function DCAF.StoryStarter:_getNextInterval()
 Debug("nisse - DCAF.StoryStarter:_getNextInterval :: interval: " .. Dump(interval))
     return interval
 end
+
+function DCAF.Story:Send(ttsChannel, message, callSign, isActual, dash, isReplay)
+    if not isClass(ttsChannel, DCAF.TTSChannel) then return Error("DCAF.Story:Send :: `ttsChannel` must be type #" .. DCAF.TTSChannel.ClassName .. ", but was: " .. DCAF.TTSChannel.ClassName) end
+    ttsChannel:Send(message, callSign, isActual, dash, isReplay)
+end
+
+function DCAF.Story:SendDelayed(delay, ttsChannel, message, callSign, isActual, dash, isReplay)
+    if not isNumber(delay) then return Error("DCAF.Story:SendDelayed :: `delay` must be positive number, but was: " .. DumpPretty(delay)) end
+    DCAF.delay(function()
+        self:Send(ttsChannel, message, callSign, isActual, dash, isReplay)
+    end, delay)
+end
+
+function DCAF.Story:SrsCalls(...)
+    return DCAF.TTSChannel.CallSequence:New(...):Execute()
+end
+
+function DCAF.Story:Call(ttsChannel, message, seconds, funcCallback, id)
+    return DCAF.TTSChannel.Call:New(ttsChannel, message, seconds, id, funcCallback)
+end
+
+--- Specifies two locations and registers a handler function to be invoked once those locations are inside a specified range
+---@param range number The specified range (meters)
+---@param locationA any Can be anything resolvable as a #DCAF.Location
+---@param locationB any Can be anything resolvable as a #DCAF.Location
+---@param handlerInRange function Handler function to be called back once locations are within range of each other
+---@param exitRange number (optional) When specified (meters), function will automatically stop monitoring for locations coming within mutual range
+---@param interval number (optional) [default = 1] Specifies an interval (seconds) to be used for monitoring locations coming within mutual range
+---@param handlerExit function (optional) Handler function to be called back once locations are outside of `exitRange`
+---@return self any self
+function DCAF.Story:WhenIn2DRange(range, locationA, locationB, handlerInRange, exitRange, interval, handlerExit)
+    if not isNumber(range) or range < 1 then return Error("DCAF.Story:WhenIn2DRange :: `range` must be positive number, but was: " .. DumpPretty(range), self) end
+    if not isFunction(handlerInRange) then return Error("DCAF.Story:WhenIn2DRange :: `handlerInRange` must be function, but was: " .. DumpPretty(handlerInRange), self) end
+
+    local validLocationA = DCAF.Location.Resolve(locationA)
+    if not validLocationA then return Error("DCAF.Story:WhenIn2DRange :: could not resolve `locationA`: " .. DumpPretty(locationA), self) end
+    local validLocationB = DCAF.Location.Resolve(locationB)
+    if not validLocationB then return Error("DCAF.Story:WhenIn2DRange :: could not resolve `locationB`: " .. DumpPretty(locationB), self) end
+    locationA = validLocationA
+    locationB = validLocationB
+
+    if isNumber(exitRange) and exitRange <= range then return Error("DCAF.Story:WhenIn2DRange :: `exitRange` must be greater than `range` ("..range.."), but was: "..exitRange) end
+
+    if not isNumber(interval) or interval < 1 then interval = 1 end
+
+    if handlerExit and not isFunction(handlerExit) then return Error("DCAF.Story:WhenIn2DRange :: `handlerExit` must be function, but was: " .. DumpPretty(handlerExit)) end
+
+    local schedulerID
+    local function endScheduler(msg)
+        if msg then Error("DCAF.Story:WhenIn2DRange :: " .. msg) end
+        pcall(function() DCAF.stopScheduler(schedulerID) end)
+    end
+
+    schedulerID = DCAF.startScheduler(function()
+        local coordA = locationA:GetCoordinate()
+        local coordB = locationB:GetCoordinate()
+        if not coordA or not coordB then return endScheduler("could not get coordinates from either location :: ENDS") end
+        local distance = coordA:Get2DDistance(coordB)
+        if distance > range then
+            if exitRange and distance >= exitRange then
+                if handlerExit then pcall(function() handlerExit(distance) end) end
+                return endScheduler()
+            end
+            return
+        end
+        -- in range
+        endScheduler()
+        pcall(function() handlerInRange(distance) end)
+    end, interval)
+    return self
+end
+
+Trace("\\\\\\\\\\ DCAF.Story.lua was loaded //////////")
