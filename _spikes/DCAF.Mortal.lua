@@ -84,9 +84,15 @@ DCAF.Mortal = {
 }
 
 --- Creates and returns a #DCAF.Mortal
-function DCAF.Mortal:New(group, breakThreshold)
-    local validGroup = getGroup(group)
-    if not validGroup then return Error("DCAF.Mortal:New :: cannot resolve `group`: " .. DumpPretty(group)) end
+function DCAF.Mortal:New(source, breakThreshold)
+    local validGroup = getGroup(source)
+    if not validGroup then
+        if isClass(source, DCAF.Convoy) then
+            validGroup = source
+        else
+            return Error("DCAF.Mortal:New :: cannot resolve `group`: " .. DumpPretty(source))
+        end
+    end
     if isClass(validGroup._mortal, DCAF.Mortal) then Error("DCAF.Mortal:New :: group was already made mortal: : " .. validGroup.GroupName) end
 
     if breakThreshold ~= nil then
@@ -137,7 +143,7 @@ function DCAF.Mortal:InitRetreat(...)
     for i, loc in ipairs(arg) do
         if stringStartsWith(loc, "WP:") then
             local wpName = string.sub(loc, 4)
-            local wp = FindWaypointByName( self.Group:CopyRoute(), wpName)
+            local wp = FindWaypointByName( getGroupRoute(self.Group), wpName)
             if not wp then
                 Error("DCAF.Mortal:InitRetreat :: location #" .. i .. " implies a named waypoint but no such waypoint was found in route: '" .. wpName .. "'")
             else
@@ -254,7 +260,7 @@ end
 
 function DCAF.Mortal:_getLife()
     local life = 0
-    local units = self.Group:GetUnits() 
+    local units = self.Group:GetUnits()
     if not units then
         if self._lifeLastCheck > 0 then
             self._countDetectedLoss = self._countDetectedLoss + 1
