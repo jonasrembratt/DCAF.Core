@@ -346,6 +346,13 @@ function GBAD_REGIMENT_GROUP_INFO:UpdateUnitDamage(unit, damage, time, isPreDest
     self.IsDamaged = true
     self.IsPreDestroyed = isPreDestroyed
     self.IsDestroyed = not DCAF.GBAD:QueryIsSAMFunctional(unit:GetGroup())
+
+-- nisse
+if self.IsDestroyed then
+    Debug("nisse - GBAD_REGIMENT_GROUP_INFO:UpdateUnitDamage :: destroyed unit: " .. unit.UnitName .. " :: .UnitStates[key]: " .. DumpPrettyDeep(self.UnitStates[key], 2))
+    DCAF.GBAD:QueryIsSAMFunctional(unit:GetGroup(), true)
+end
+
 end
 
 function GBAD_REGIMENT_GROUP_INFO:Categorize(regiment)
@@ -410,7 +417,8 @@ function GBAD_REGIMENT_GROUP_INFO:ScanAirborneUnits(range, coalition, breakOnFir
     return ScanAirborneUnits(self.Location, range, coalition, breakOnFirst, measureSlantRange, cacheTTL)
 end
 
-local function gbadRegiment_unitWasHit(unit, damage, time, isPreDestroyed) -- note: Was can pass a damage. Mainly for simulation/debugging purposes
+local function gbadRegiment_unitWasHit(unit, damage, time, isPreDestroyed)
+Debug("nisse - gbadRegiment_unitWasHit :: unit: " .. DumpPretty(unit))
     damage = damage or unit:GetDamageRelative()
     time = time or UTILS.SecondsOfToday()
     if damage == 0 then
@@ -560,23 +568,24 @@ function GBAD_REGIMENT_DB.Spawn(regiment, info, onSpawnedFunc, interval, lobotom
 
     local function includeInIADS()
         initGroupDestruction()
+        local group = info.Group
         if info.Category ~= GBAD_REGIMENT_GROUP_CATEGORY.SAM then
-            return info.Group end
+            return group end
 
         if regiment:GetIsInoperable(info) then -- some SAM groups might not be available (see DCAF.GBAD.Regiment:InitOperableSystems)
             Debug("GBAD_REGIMENT_DB.Spawn :: group is inoperable (not included in IADS): " .. info.GroupName)
-            return info.Group
+            return group
         end
         if info.IsDestroyed then
             Debug("GBAD_REGIMENT_DB.Spawn :: group is destroyed (not included in IADS): " .. info.GroupName)
-            return info.Group
+            return group
         end
         Debug("GBAD_REGIMENT_DB.Spawn :: " .. regiment.Name .. " :: group is included in IADS: " .. info.GroupName)
-        regiment._iads.SAM_Group:AddGroup(info.Group)
+        regiment._iads.SAM_Group:AddGroup(group)
         if regiment.IsActive then
             regiment._iads:_RefreshSAMTable()
         end
-        return info.Group
+        return group
     end
 
     if info.RefSpawnCount > 1 then
@@ -1039,7 +1048,11 @@ end
 function GBAD_REGIMENT_DB.DestroyAllDynamic(regiment)
     -- despawn all GROUPs that are not IsInitialSpawn
     GBAD_REGIMENT_DB.DespawnAllForRegiment(regiment, function(info)
-        return info.IsDynamicSpawn
+        if info.IsDynamicSpawn then
+            return true
+        else
+            info.Group:OptionAlarmStateGreen()
+        end
     end)
 end
 
@@ -1128,15 +1141,15 @@ function DCAF.GBAD.Regiment:SetDefaultPreventEvasiveRelocation(value)
     GBAD_REGIMENT_DEFAULTS.UseEvasiveRelocation = value
 end
 
-function DCAF.GBAD.Regiment:InitMaxActiveSAMs(short, mid, long)
-    if short ~= nil and not isBoolean(short) then
-        error("DCAF.GBAD.Regiment.InitMaxActiveSAMs :: `short` must be number, but was: " .. DumpPretty(short)) end
-    if short ~= nil and not isBoolean(mid) then
-        error("DCAF.GBAD.Regiment.InitMaxActiveSAMs :: `mid` must be number, but was: " .. DumpPretty(mid)) end
-    if short ~= nil and not isBoolean(long) then
+function DCAF.GBAD.Regiment:InitMaxActiveSAMs(long, mid, shorads)
+    if long ~= nil and not isNumber(long) then
         error("DCAF.GBAD.Regiment.InitMaxActiveSAMs :: `long` must be number, but was: " .. DumpPretty(long)) end
+    if mid ~= nil and not isNumber(mid) then
+        error("DCAF.GBAD.Regiment.InitMaxActiveSAMs :: `mid` must be number, but was: " .. DumpPretty(mid)) end
+    if shorads ~= nil and not isNumber(shorads) then
+        error("DCAF.GBAD.Regiment.InitMaxActiveSAMs :: `short` must be number, but was: " .. DumpPretty(shorads)) end
 
-    self.MaxActiveSAMsShort = short
+    self.MaxActiveSAMsShort = shorads
     self.MaxActiveSAMsMid = mid
     self.MaxActiveSAMsLong = long
     return self
@@ -1785,177 +1798,184 @@ end
 
 local function hackMantisIADS(regiment, iads)
 
-    function iads:_CheckLoop(samset,detset,dlink,limit)
-        local regimentIndex = GBAD_REGIMENT_DB.RegimentIndex[regiment.Name] -- //hacked//
+--     function iads:_CheckLoop(samset,detset,dlink,limit)
+--         if regiment._inhibitedGroups then return self end -- //hacked//
+--         local regimentIndex = GBAD_REGIMENT_DB.RegimentIndex[regiment.Name] -- //hacked//
 
-        self:T(self.lid .. "CheckLoop " .. #detset .. " Coordinates")
-        local switchedon = 0
-        for _,_data in pairs (samset) do
-          local samcoordinate = _data[2]
-          local name = _data[1]
-          local radius = _data[3]
-          local height = _data[4]
-          local blind = _data[5] * 1.25 + 1
-          local samgroup = GROUP:FindByName(name)
--- Debug("nisse - iads:_CheckLoop :: name: " .. name .. " :: radius: " .. radius .. " :: height: " .. height)
-          local IsInZone, Distance, coord = self:_CheckObjectInZone(detset, samcoordinate, radius, height, dlink) -- //hacked// -- also receives target coordinate
--- Debug("nisse - iads:_CheckLoop :: IsInZone: " .. Dump(IsInZone))
-          local tgtRelativeAltitude                     -- //hacked//
-          if coord then                                 -- //hacked//
-            tgtRelativeAltitude = coord.y - samcoordinate.y
-          end
-          local suppressed = self.SuppressedGroups[name] or false
-          local activeshorad = self.Shorad.ActiveGroups[name] or false
-          local groupName = GetGroupOrUnitName(name)    -- //hacked//
-          local info = regimentIndex[groupName]         -- //hacked//
--- nisse
--- if not info then
---     Debug("nisse - hackMantisIADS__CheckLoop :: info not found: " .. groupName)
--- end
-          info.IsActiveShorad = activeshorad            -- //hacked//
-          local delegate = info.Delegate                -- //hacked//
+--         self:T(self.lid .. "CheckLoop " .. #detset .. " Coordinates")
+--         local switchedon = 0
+--         for _,_data in pairs (samset) do
+--           local samcoordinate = _data[2]
+--           local name = _data[1]
+--           local radius = _data[3]
+--           local height = _data[4]
+--           local blind = _data[5] * 1.25 + 1
+--           local samgroup = GROUP:FindByName(name)
+-- -- Debug("nisse - iads:_CheckLoop :: name: " .. name .. " :: radius: " .. radius .. " :: height: " .. height)
+--           local IsInZone, Distance, coord = self:_CheckObjectInZone(detset, samcoordinate, radius, height, dlink) -- //hacked// -- also receives target coordinate
+-- -- Debug("nisse - iads:_CheckLoop :: IsInZone: " .. Dump(IsInZone))
+--           local tgtRelativeAltitude                     -- //hacked//
+--           if coord then                                 -- //hacked//
+--             tgtRelativeAltitude = coord.y - samcoordinate.y
+--           end
+--           local suppressed = self.SuppressedGroups[name] or false
+--           local activeshorad = self.Shorad.ActiveGroups[name] or false
+--           local groupName = GetGroupOrUnitName(name)    -- //hacked//
+--           local info = regimentIndex[groupName]         -- //hacked//
+-- -- nisse
+-- -- if not info then
+-- --     Debug("nisse - hackMantisIADS__CheckLoop :: info not found: " .. groupName)
+-- -- end
+--           info.IsActiveShorad = activeshorad            -- //hacked//
+--           local delegate = info.Delegate                -- //hacked//
 
-          local function shouldActivate()               -- //hacked//
-            if delegate and delegate.ShouldActivate then
-                if delegate.ShouldActivate(info, Distance, tgtRelativeAltitude) then
--- Debug("nisse - delegate for group (" .. info.GroupName ..") says activate")
-                    return true
-                else
--- Debug("nisse - delegate for group (" .. info.GroupName ..") says do not activate")
-                    return false
-                end
-            end
+--           local function shouldActivate()               -- //hacked//
+--             if delegate and delegate.ShouldActivate then
+--                 if delegate.ShouldActivate(info, Distance, tgtRelativeAltitude) then
+-- -- Debug("nisse - delegate for group (" .. info.GroupName ..") says activate")
+--                     return true
+--                 else
+-- -- Debug("nisse - delegate for group (" .. info.GroupName ..") says do not activate")
+--                     return false
+--                 end
+--             end
 
-            return true
-          end
+--             return true
+--           end
 
-          local function shouldDeactivate()             -- //hacked//
-            if delegate and delegate.ShouldDeactivate then
-                return delegate.ShouldDeactivate(info) end
+--           local function shouldDeactivate()             -- //hacked//
+--             if delegate and delegate.ShouldDeactivate then
+--                 return delegate.ShouldDeactivate(info) end
 
-            return true
-          end
+--             return true
+--           end
 
-          local function triggerOnActivatedDeactivated(value) -- //hacked//
-            if value then
-                if delegate and delegate._onActivated then
-                    return delegate._onActivated(info) end
+--           local function triggerOnActivatedDeactivated(value) -- //hacked//
+--             if value then
+--                 if delegate and delegate._onActivated then
+--                     return delegate._onActivated(info) end
 
-                if regiment._onActivated then
-                    return regiment._onActivated(info) end
-            else
-                if delegate and delegate._onDeactivated then
-                    return delegate._onDeactivated(info) end
+--                 if regiment._onActivated then
+--                     return regiment._onActivated(info) end
+--             else
+--                 if delegate and delegate._onDeactivated then
+--                     return delegate._onDeactivated(info) end
 
-                if regiment._onActivated then
-                    return regiment._onDeactivated(info) end
-            end
-          end
+--                 if regiment._onActivated then
+--                     return regiment._onDeactivated(info) end
+--             end
+--           end
 
-          if IsInZone and not suppressed and not activeshorad then --check any target in zone and not currently managed by SEAD
--- Debug("nisse - iads:_CheckLoop :: samgroup:IsAlive(): " .. Dump(samgroup:IsAlive()))
-            if samgroup:IsAlive() and shouldActivate() then -- //hacked//
-              -- switch on SAM
-              local switch = false
-              if self.UseEmOnOff and switchedon < limit then
-                -- DONE: add emissions on/off
-                samgroup:EnableEmission(true)
-                switchedon = switchedon + 1
-                switch = true
-              elseif (not self.UseEmOnOff) and switchedon < limit then
-                samgroup:OptionAlarmStateRed()
-                switchedon = switchedon + 1
-                switch = true
-              end
-              if switch then
-                triggerOnActivatedDeactivated(true)         -- //hacked//
-              end
-              if self.SamStateTracker[name] ~= "RED" and switch then
-                self:__RedState(1,samgroup)
-                self.SamStateTracker[name] = "RED"
-              end
-              -- link in to SHORAD if available
-              -- DONE: Test integration fully
-              if self.ShoradLink and (Distance < self.ShoradActDistance or Distance < blind ) then -- don't give SHORAD position away too early
-                local Shorad = self.Shorad
-                local radius = self.checkradius
-                local ontime = self.ShoradTime
-                Shorad:WakeUpShorad(name, radius, ontime)
-                self:__ShoradActivated(1,name, radius, ontime)
-              end
-              -- debug output
-              if (self.debug or self.verbose) --[[ and switch  ]] then  -- //hacked// -- always report RED, noto nly when switched
-                local text = string.format("SAM %s in alarm state RED!", name)
-                local m=MESSAGE:New(text,10,"MANTIS"):ToAllIf(self.debug)
-                if self.verbose then self:I(self.lid..text) end
-              end
-            end --end alive
-          else
-            if samgroup:IsAlive() and not suppressed and not activeshorad and shouldDeactivate() then -- //hacked//
-              -- switch off SAM
-              if self.UseEmOnOff  then
-                samgroup:EnableEmission(false)
-              else
-                samgroup:OptionAlarmStateGreen()
-              end
-              triggerOnActivatedDeactivated(false)          -- //hacked//
-              if self.SamStateTracker[name] ~= "GREEN" then
-                self:__GreenState(1,samgroup)
-                self.SamStateTracker[name] = "GREEN"
-              end
-              if self.debug or self.verbose then
-                local text = string.format("SAM %s in alarm state GREEN!", name)
-                local m=MESSAGE:New(text,10,"MANTIS"):ToAllIf(self.debug)
-                if self.verbose then self:I(self.lid..text) end
-              end
-            end --end alive
-          end --end check
-        end --for for loop
-        return self
-    end
+--           if IsInZone and not suppressed and not activeshorad then --check any target in zone and not currently managed by SEAD
+-- -- Debug("nisse - iads:_CheckLoop :: samgroup:IsAlive(): " .. Dump(samgroup:IsAlive()))
+--             if samgroup:IsAlive() and shouldActivate() then -- //hacked//
+--               -- switch on SAM
+--               local switch = false
+--               if self.UseEmOnOff and switchedon < limit then
+--                 -- DONE: add emissions on/off
+-- DCAF.delay(function()
+-- Debug("nisse - MANTIS:_CheckLoop :: EMISSION ON x :: " .. samgroup.GroupName)
+-- end, 1)
+--                 switchedon = switchedon + 1
+--                 switch = true
+--                 samgroup:EnableEmission(true)
+--               elseif (not self.UseEmOnOff) and switchedon < limit then
+-- DCAF.delay(function()
+-- Debug("nisse - MANTIS:_CheckLoop :: ALARM STATE RED :: " .. samgroup.GroupName .. " :: is weapon free?: " .. Dump(samgroup:OptionROEOpenFireWeaponFreePossible()))
+-- end, 1)
+--                 samgroup:OptionAlarmStateRed()
+--                 switchedon = switchedon + 1
+--                 switch = true
+--               end
+--               if switch then
+--                 triggerOnActivatedDeactivated(true)         -- //hacked//
+--               end
+--               if self.SamStateTracker[name] ~= "RED" and switch then
+--                 self:__RedState(1,samgroup)
+--                 self.SamStateTracker[name] = "RED"
+--               end
+--               -- link in to SHORAD if available
+--               -- DONE: Test integration fully
+--               if self.ShoradLink and (Distance < self.ShoradActDistance or Distance < blind ) then -- don't give SHORAD position away too early
+--                 local Shorad = self.Shorad
+--                 local radius = self.checkradius
+--                 local ontime = self.ShoradTime
+--                 Shorad:WakeUpShorad(name, radius, ontime)
+--                 self:__ShoradActivated(1,name, radius, ontime)
+--               end
+--               -- debug output
+--               if (self.debug or self.verbose) --[[ and switch  ]] then  -- //hacked// -- always report RED, noto nly when switched
+--                 local text = string.format("SAM %s in alarm state RED!", name)
+--                 local m=MESSAGE:New(text,10,"MANTIS"):ToAllIf(self.debug)
+--                 if self.verbose then self:I(self.lid..text) end
+--               end
+--             end --end alive
+--           else
+--             if samgroup:IsAlive() and not suppressed and not activeshorad and shouldDeactivate() then -- //hacked//
+--               -- switch off SAM
+--               if self.UseEmOnOff  then
+--                 samgroup:EnableEmission(false)
+--               else
+--                 samgroup:OptionAlarmStateGreen()
+--               end
+--               triggerOnActivatedDeactivated(false)          -- //hacked//
+--               if self.SamStateTracker[name] ~= "GREEN" then
+--                 self:__GreenState(1,samgroup)
+--                 self.SamStateTracker[name] = "GREEN"
+--               end
+--               if self.debug or self.verbose then
+--                 local text = string.format("SAM %s in alarm state GREEN!", name)
+--                 local m=MESSAGE:New(text,10,"MANTIS"):ToAllIf(self.debug)
+--                 if self.verbose then self:I(self.lid..text) end
+--               end
+--             end --end alive
+--           end --end check
+--         end --for for loop
+--         return self
+--     end
 
-    function iads:_CheckObjectInZone(dectset, samcoordinate, radius, height, dlink) -- hacked to also produce relative altitude
--- Debug("nisse - iads:_CheckObjectInZone...")
-        self:T(self.lid.."_CheckObjectInZone")
-        -- check if non of the coordinate is in the given defense zone
-        local rad = radius or self.checkradius
-        local set = dectset
-        if dlink then
-            -- DEBUG
-            set = self:_PreFilterHeight(height)
-        end
--- Debug("nisse - iads:_CheckObjectInZone :: set: " .. DumpPretty(set))
-        for _,_coord in pairs (set) do
-            local coord = _coord  -- get current coord to check
-            -- output for cross-check
-            local targetdistance = samcoordinate:DistanceFromPointVec2(coord)
-            if not targetdistance then
-                targetdistance = samcoordinate:Get2DDistance(coord)
-            end
-            -- check accept/reject zones
-            local zonecheck = true
-            if self.usezones then
-                -- DONE
-                zonecheck = self:_CheckCoordinateInZones(coord)
-            end
-            if self.verbose and self.debug then
-                -- local dectstring = coord:ToStringLLDMS()  --//hacked//-- dead code
-                local samstring = samcoordinate:ToStringLLDMS()
-                local inrange = "false"
-                if targetdistance <= rad then
-                    inrange = "true"
-                end
-                local text = string.format("Checking SAM at %s | Targetdist %d | Rad %d | Inrange %s", samstring, targetdistance, rad, inrange)
-                -- local m = MESSAGE:New(text,10,"Check"):ToAllIf(self.debug)  --//hacked//-- dead code
-                self:T(self.lid..text)
-            end
-            -- end output to cross-check
-            if targetdistance <= rad and zonecheck then
-                return true, targetdistance, coord --//hacked//-- passes back coordinate
-            end
-        end
-        return false, 0
-    end
+--     function iads:_CheckObjectInZone(dectset, samcoordinate, radius, height, dlink) -- hacked to also produce relative altitude
+-- -- Debug("nisse - iads:_CheckObjectInZone...")
+--         self:T(self.lid.."_CheckObjectInZone")
+--         -- check if non of the coordinate is in the given defense zone
+--         local rad = radius or self.checkradius
+--         local set = dectset
+--         if dlink then
+--             -- DEBUG
+--             set = self:_PreFilterHeight(height)
+--         end
+-- -- Debug("nisse - iads:_CheckObjectInZone :: set: " .. DumpPretty(set))
+--         for _,_coord in pairs (set) do
+--             local coord = _coord  -- get current coord to check
+--             -- output for cross-check
+--             local targetdistance = samcoordinate:DistanceFromPointVec2(coord)
+--             if not targetdistance then
+--                 targetdistance = samcoordinate:Get2DDistance(coord)
+--             end
+--             -- check accept/reject zones
+--             local zonecheck = true
+--             if self.usezones then
+--                 -- DONE
+--                 zonecheck = self:_CheckCoordinateInZones(coord)
+--             end
+--             if self.verbose and self.debug then
+--                 -- local dectstring = coord:ToStringLLDMS()  --//hacked//-- dead code
+--                 local samstring = samcoordinate:ToStringLLDMS()
+--                 local inrange = "false"
+--                 if targetdistance <= rad then
+--                     inrange = "true"
+--                 end
+--                 local text = string.format("Checking SAM at %s | Targetdist %d | Rad %d | Inrange %s", samstring, targetdistance, rad, inrange)
+--                 -- local m = MESSAGE:New(text,10,"Check"):ToAllIf(self.debug)  --//hacked//-- dead code
+--                 self:T(self.lid..text)
+--             end
+--             -- end output to cross-check
+--             if targetdistance <= rad and zonecheck then
+--                 return true, targetdistance, coord --//hacked//-- passes back coordinate
+--             end
+--         end
+--         return false, 0
+--     end
 
     function iads:StartIntelDetection()
         self:T(self.lid.."Starting Intel Detection")
@@ -2235,7 +2255,7 @@ function DCAF.GBAD.Regiment:Start()
         return self
     end
     Debug(DCAF.GBAD.Regiment.ClassName .. ":Start :: " .. self.Name .. "...")
-    local iads = MANTIS:New(self.Name, "n/a", self.EWRPrefix, self.HQ.GroupName, self.Coalition, true, self.AWACS)
+    local iads = MANTIS:New(self.Name, "n/a", self.EWRPrefix, self.HQ.GroupName, self.Coalition, false, self.AWACS)
     hackMantisIADS(self, iads)
     local set_zone = SET_ZONE:New()
     for _, zone in ipairs(self.Zones) do
@@ -2301,21 +2321,18 @@ function DCAF.GBAD.Regiment:Activate(info, spawnDelegate)
 
     if isBoolean(self.Debug) then
         self._iads:Debug(self.Debug)
-        if self.Debug == true then
+        if self.Debug == true and DCAF.GBAD.Debug then
             function self._iads:OnAfterSeadSuppressionStart(From, Event, To, Group, Name)
-                if DCAF.GBAD.Debug and self.Debug then
-                    DebugMessageTo(nil, "Announcement.ogg")
-                    DebugMessageTo(nil, "nisse - DCAF.GBAD.Regiment:Activate_suppressed_start :: Group: " .. DumpPretty(Group.GroupName) .. " : Event: " .. DumpPrettyDeep(Event, 1))
-                end
+                DebugMessageTo(nil, "Announcement.ogg")
+                DebugMessageTo(nil, "nisse - DCAF.GBAD.Regiment:Activate_suppressed_start :: Group: " .. DumpPretty(Group.GroupName) .. " : Event: " .. DumpPrettyDeep(Event, 1))
             end
-            if DCAF.GBAD.Debug and self.Debug then
-                function self._iads:OnAfterSeadSuppressionEnd(From, Event, To, Group, Name)
-                    DebugMessageTo(nil, "Announcement.ogg")
-                    DebugMessageTo(nil, "nisse - DCAF.GBAD.Regiment:Activate_suppressed_end :: Group: " .. DumpPretty(Group))
-                end
+            function self._iads:OnAfterSeadSuppressionEnd(From, Event, To, Group, Name)
+                DebugMessageTo(nil, "Announcement.ogg")
+                DebugMessageTo(nil, "nisse - DCAF.GBAD.Regiment:Activate_suppressed_end :: Group: " .. DumpPretty(Group))
             end
         end
     end
+
     if self.Mode ~= DCAF.GBAD.RegimentMode.Static or spawnDelegate or regimentHasSpawnDelegates(self) then
         local onSpawnedFunc
         if spawnDelegate then
@@ -2327,10 +2344,12 @@ function DCAF.GBAD.Regiment:Activate(info, spawnDelegate)
         gbadRegiment_monitorPostActivationBegin(self)
     end
     self._iads.UseEvasiveRelocation = self.UseEvasiveRelocation
-    mantis_hackSuppression(self._iads)
+    -- mantis_hackSuppression(self._iads)
 end
 
 function DCAF.GBAD.Regiment:Deactivate(monitorForReactivation)
+Debug("nisse - DCAF.GBAD.Regiment:Deactivate :: " .. DCAF.StackTrace())
+    Debug("DCAF.GBAD.Regiment:Deactivate :: " .. self.Name .. " :: monitorForReactivation: " .. Dump(monitorForReactivation))
     if not self.IsActive then
         return end
 
@@ -2387,15 +2406,17 @@ function DCAF.GBAD.Regiment:GetSAMs()
 end
 
 --- Stops the regiment, potentially despawning all its GBAD groups, or puting them to "sleep" (alarm state green, ROE=Hold Fire)
--- @param #number delay - (optional) Delays stopping the regiment with as as many seconds
--- @param #boolean sleep - (optional; default = false) When true, and groups are not getting despawned (only happens when spawning/despawning occurs dynamically) all groups are put to "sleep" (alarm state green, ROE=Hold Fire)
-function DCAF.GBAD.Regiment:Stop(delay, sleep)
+--- @param sleep boolean - (optional; default = false) When true, and groups are not getting despawned (only happens when spawning/despawning occurs dynamically) all groups are put to "sleep" (alarm state green, ROE=Hold Fire)
+--- @param delay number - (optional) Delays stopping the regiment with as as many seconds
+function DCAF.GBAD.Regiment:Stop(sleep, delay)
+    Debug("DCAF.GBAD.Regiment:Stop :: " .. self.Name .. " :: sleep: " .. Dump(sleep) .. " :: delay: " .. Dump(delay))
     self:Deactivate(false)
     if not self:IsStarted() then
         return
     end
     GBAD_REGIMENT_DB.DespawnAllForRegiment(self)
     self._iads:Stop(delay or 1)
+    local useEmOnOff = self._iads.UseEmOnOff
     self._iads = nil
     if sleep == true then
         local infoList = GBAD_REGIMENT_DB.GetAll(self)
@@ -2404,8 +2425,11 @@ function DCAF.GBAD.Regiment:Stop(delay, sleep)
             if not group or not group:IsActive() or not group:IsAlive() then
                 return end
 
-            group:OptionAlarmStateGreen()
-            group:OptionROEHoldFire()
+            if useEmOnOff then
+                group:EnableEmission(false)
+            else
+                group:OptionAlarmStateGreen()
+            end
         end
 
         for _, info in ipairs(infoList) do
@@ -2417,6 +2441,52 @@ end
 
 function DCAF.GBAD.Regiment:IsStarted()
     return self._iads ~= nil
+end
+
+function DCAF.GBAD.Regiment:Inhibit(value, duration)
+    Debug("DCAF.GBAD.Regiment:Inhibit :: " .. self.Name .. " :: value: " .. Dump() .. " :: duration: " .. Dump(duration))
+    if not isBoolean(value) then return Error("DCAF.GBAD.Regiment:Inhibit :: `value` must be boolean, but was: " .. Dump(value), self) end
+
+    local function inhibitHotGroup(groupName)
+        local samgroup = getGroup(groupName)
+        if not samgroup then return end
+Debug("nisse - DCAF.GBAD.Regiment:Inhibit :: inhibits HOT group: " .. groupName)
+        if self._iads.UseEmOnOff then
+            samgroup:EnableEmission(false)
+        else
+            samgroup:OptionAlarmStateGreen()
+        end
+    end
+
+    if value then
+        if self._inhibitedGroups then
+            if self._inhibitedDuration and isNumber(duration) then duration = duration + self._inhibitedDuration end
+        end
+        self._iads:__Stop(1)
+        self._inhibitedGroups = {}
+Debug("nisse - DCAF.GBAD.Regiment:Inhibit (aaa) :: self._iads.SamStateTracker: " .. DumpPretty(self._iads.SamStateTracker))
+        for groupName, state in pairs(self._iads.SamStateTracker) do
+            if state == "RED" then
+                inhibitHotGroup(groupName)
+                self._iads.SamStateTracker[groupName] = "GREEN"
+            end
+        end
+Debug("nisse - DCAF.GBAD.Regiment:Inhibit (ccc) :: self._iads.SamStateTracker: " .. DumpPretty(self._iads.SamStateTracker))
+
+    elseif self._inhibitedGroups then
+        -- for _, group in ipairs(self._inhibitedGroups) do
+        --     group:OptionROE(ENUMS.ROE.WeaponFree)
+        -- end
+        self._iads:Start()
+        self._inhibitedGroups = nil
+        self._inhibitedDuration = nil
+    end
+    if self._inhibitedGroups and isNumber(duration) then
+        self._inhibitedDuration = duration
+        DCAF.delay(function()
+            self:Inhibit(false)
+        end, duration)
+    end
 end
 
 Trace("\\\\\\\\\\ DCAF.GBAD.Regiment.lua was loaded //////////")

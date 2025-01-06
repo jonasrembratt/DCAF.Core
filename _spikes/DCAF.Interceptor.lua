@@ -324,7 +324,7 @@ function DCAF.Interceptor:_monitorApproach() -- i == #DCAF.Interceptor
             if not coordTargetUnit then return end
             local distance = me.OwnLocation:GetCoordinate():Get2DDistance(coordTargetUnit)
             if distance > TriggerMinDistance then return end
-            units = { self.TargetUnit }
+            units =  { [0] = { Unit = self.TargetUnit, Distance = distance } }
 -- Debug("nisse - DCAF.Interceptor:_monitorApproach :: found single target: " .. me.TargetUnit.UnitName)
         else
             local scan = ScanAirborneUnits(me.OwnLocation, TriggerMinDistance, me.FilterCoalition, false, true, nil, true)
@@ -333,15 +333,17 @@ function DCAF.Interceptor:_monitorApproach() -- i == #DCAF.Interceptor
 -- Debug("DCAF.Interceptor:_monitorApproach :: scan.Units: " .. DumpPrettyDeep(scan.Units, 2) )
         end
 
-        local function isEstablishing(unit)
--- Debug("DCAF.Interceptor:_monitorApproach_isNearbyUnit :: unit: " .. unit.UnitName .. " :: info: " .. DumpPretty(info) )
-            if not unit:IsAlive() or unit:GetGroup().GroupName == me.Group then return end -- we don't intercept members of same group
+        local function isEstablishing(info)
+            local unit = info.Unit
+            if not unit:IsAlive()
+               or unit:GetGroup().GroupName == me.Group then return end -- we don't intercept members of same group
+
             me._units =  me._units or {}
             local monitorInfo = me._units[unit.UnitName]
             if not monitorInfo then
                 me._units[unit.UnitName] = { Unit = unit, Count = 1 }
                 return
-                end
+            end
 -- MessageTo(me.Group, "nisse - approach " .. unit.UnitName .. " = " .. monitorInfo.Count .. "...")
             monitorInfo.Count = monitorInfo.Count + 1
             return monitorInfo.Count == TriggerCount or checkInInterceptArea(GetRelativePosition(me.OwnLocation, unit), TriggerMinDistance)
@@ -352,8 +354,8 @@ function DCAF.Interceptor:_monitorApproach() -- i == #DCAF.Interceptor
                 return a.Distance < b.Distance
             end)
         end
-        for _, unit in ipairs(units) do
-            if isEstablishing(unit) then
+        for _, info in ipairs(units) do
+            if isEstablishing(info) then
                 me:_monitorIntercept()
                 return me:_cleanUp(TriggerMinDistance, TriggerCount)
             end

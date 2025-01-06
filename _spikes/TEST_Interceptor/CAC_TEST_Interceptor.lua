@@ -1,6 +1,13 @@
-Interceptor = DCAF.Interceptor:New("ICPT-1"):AddPlayerMenus():Start()
+Interceptor = DCAF.Interceptor.Debug(true)
 
-DCAF.Interceptor:NewForClient():AddPlayerMenus():OnCreated(function(i)
+Interceptor = DCAF.Interceptor:New("ICPT-1")
+                            --   :AddPlayerMenus()
+                              :Start()
+
+DCAF.Interceptor:NewForClient()
+                -- :AddPlayerMenus()
+                :OnCreated(function(i)
+
 Debug("nisse - OnCreated :: i: " .. DumpPretty(i))
 MessageTo(nil, "INTERCEPTOR CREATED: " .. i.Group.GroupName)
     if i.Group.GroupName == "ICPT-2" then
