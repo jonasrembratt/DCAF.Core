@@ -18,10 +18,10 @@ DCAF.Convoy = {
 
 
 --- Creates a convoy from multiple groups, such that each group follows the previous one and tries avoid causing traffic jams
----@param groups any - A list of groups, or a name pattern (string) to automatically include all groups matching that pattern
+---@param groups any - A list of #GROUP, a #SET_GROUP, or a name pattern (string) to automatically include all groups matching that pattern
 ---@param intervalMeters number - (optional; default = 30) A distance to be used as an interval between each group. Minimum value is 15m (will be enforced)
 function DCAF.Convoy:New(groups, name, intervalMeters)
-    if (isAssignedString) then
+    if (isAssignedString(groups)) then
         groups = SET_GROUP:New():FilterPrefixes(groups):FilterOnce()
     end
     if isClass(groups, SET_GROUP) then
@@ -74,6 +74,26 @@ function DCAF.Convoy:New(groups, name, intervalMeters)
     end, 5)
 
     return convoy
+end
+
+function DCAF.Convoy:Dissolve()
+    if not self.SchedulerID then return self.Groups end
+    pcall(function()
+        DCAF.stopScheduler(self.SchedulerID)
+        self.SchedulerID = nil
+    end)
+    return self.Groups
+end
+
+--- Ensure a convoy can be used as a DCAF.Location...
+local DCAF_Convoy_Location_Delegate = DCAF.LocationDelegate:New()
+DCAF.Location.AddDelegate(DCAF_Convoy_Location_Delegate)
+function DCAF_Convoy_Location_Delegate:ResolveLocation(source)
+    if isClass(source, DCAF.Convoy) then
+        return DCAF.Location:NewRaw(source.Name, source, function()
+            return source:GetCoordinate()
+        end)
+    end
 end
 
 --- Sets interval between a specified group of the convoy, to the group in front of it
@@ -200,7 +220,7 @@ function DCAF.Convoy:__adjustForInterval(leadCoord, leadUnit, nextCoord, nextUni
     end
 end
 
---- Halts the convoy until `Continue` is invoked
+--- Halts the convoy until `RouteResume` is invoked
 function DCAF.Convoy:RouteStop()
     if self.LeadGroup then
         Debug("DCAF.Convoy:RouteStop :: stops lead group: " .. self.LeadGroup.GroupName)

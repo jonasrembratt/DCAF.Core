@@ -1,3 +1,5 @@
+local DCAF_ShowOfForce_WpnTrackerCount = 0
+
 DCAF.ShowOfForce = {
     ClassName = "DCAF.ShowOfForce",
     ----
@@ -185,6 +187,8 @@ function DCAF_ShowOfForce_Event:Buzz(iniUnit, iniUnitSpeedMps, closestUnit, clos
     e.ClosestUnit = closestUnit
     e.ClosestUnitName = closestUnit.UnitName
     e.ClosestDistance = closestDistance
+    e.TargetGroup = closestUnit:GetGroup()
+    e.TargetGroupName = e.TargetGroup.GroupName
     return e
 end
 
@@ -200,6 +204,8 @@ function DCAF_ShowOfForce_Event:WeaponImpact(wpnTrack, closestUnit, closestDista
     e.ClosestUnit = closestUnit
     e.ClosestUnitName = closestUnit.UnitName
     e.ClosestDistance = closestDistance
+    e.TargetGroup = closestUnit:GetGroup()
+    e.TargetGroupName = e.TargetGroup.GroupName
     return e
 end
 
@@ -281,6 +287,7 @@ function DCAF.ShowOfForce:_startWeaponTracker()
     DCAF.ShowOfForce._wpnTrackerHandlers[#DCAF.ShowOfForce._wpnTrackerHandlers+1] = self
     if DCAF.ShowOfForce._wpnTracker then return DCAF.ShowOfForce._wpnTracker end
     DCAF.ShowOfForce._wpnTracker = DCAF.WpnTracker:New(self.ClassName):IgnoreIniGroups({self.Group}):Start(false)
+    DCAF_ShowOfForce_WpnTrackerCount = DCAF_ShowOfForce_WpnTrackerCount+1
     function DCAF.ShowOfForce._wpnTracker:OnImpact(wpnTrack)
         Debug("DCAF.ShowOfForce:_startWeaponTracker_OnImpact :: wpnTrack: " .. DumpPretty(wpnTrack))
         for _, showOfForce in ipairs(DCAF.ShowOfForce._wpnTrackerHandlers) do
@@ -306,8 +313,9 @@ function DCAF.ShowOfForce:_startWeaponTracker()
 end
 
 function DCAF.ShowOfForce._endWeaponTracker()
-    DCAF.ShowOfForce._weaponTrackerCount = DCAF.ShowOfForce._weaponTrackerCount-1
-    if DCAF.ShowOfForce._weaponTrackerCount == 0 then
+    if DCAF_ShowOfForce_WpnTrackerCount == 0 then return end
+    DCAF_ShowOfForce_WpnTrackerCount = DCAF_ShowOfForce_WpnTrackerCount-1
+    if DCAF_ShowOfForce_WpnTrackerCount == 0 then
         DCAF.ShowOfForce._wpnTracker:End()
         DCAF.ShowOfForce._wpnTracker = nil
     end

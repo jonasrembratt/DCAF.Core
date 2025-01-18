@@ -29,6 +29,20 @@ DCAF = {
 
 BASE:Inherit(DCAF, BASE:New())
 
+Coalition = {
+    Blue = "blue",
+    Red = "red",
+    Neutral = "neutral"
+}
+
+DCAF.Flight = {
+    ClassName = "DCAF.Flight",
+    ----
+    CallSign = "",
+    CallSignPhonetic = "",
+    Group = nil
+}
+
 DCAF.DateTime = {
     ClassName = "DCAF.DateTime",
     Year = nil,         -- #number
@@ -206,12 +220,6 @@ function getAngleDiff(a1, a2)
     return -(a1 - a2)
 end
 
-VariableValue = {
-    ClassName = "VariableValue",
-    Value = 100,           -- #number - fixed value)
-    Variance = nil         -- #number - variance (0.0 --> 1.0)
-}
-
 function isString( value ) return type(value) == "string" end
 function isAssignedString( value )
     if not isString(value) then
@@ -258,6 +266,62 @@ function isUnits(value)
         or value == DCAF.Units.Metric
 end
 
+function trim(s)
+    return (s:gsub("^%s*(.-)%s*$", "%1"))
+end
+
+function trimSpawnIndex(s)
+    local start, stop = string.find(s, "#%d+[-]%d+$")
+    if not start then
+        return s end
+
+    local trimmed = string.sub(s, 1, start-1)
+    return trimmed
+end
+
+function escapePattern(text)
+    -- Escape all special characters by prefixing them with %
+    return text:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1")
+end
+
+function inString( s, pattern )
+    return string.find(s, pattern ) ~= nil
+end
+
+function findLastOccurrence(str, char)
+    local reversed_pos = str:reverse():find(char, 1, true) -- true ensures a plain match
+    if reversed_pos then
+        return #str - reversed_pos + 1 -- Convert position in reversed string to original string
+    else
+        return nil -- Character not found
+    end
+end
+
+function newString(pattern, count)
+    if not isAssignedString(pattern) then
+        error("newString :: `pattern` must be an assigned string, but was: " .. DumpPretty(pattern)) end
+
+    if not isNumber(count) then
+        error("newString :: `count` must be a number, but was: " .. type(count)) end
+
+    local s = pattern
+    for i = 1, count-1, 1 do
+        s = s .. pattern
+    end
+    return s
+end
+
+function findFirstNonWhitespace( s, start )
+    local sLen = string.len(s)
+    for i=start, sLen, 1 do
+        local c = string.sub(s, i, i)
+        if (c ~= ' ' and c ~= '\n' and c ~= '\t') then
+            return i
+        end
+    end
+    return nil
+end
+
 function getTableType(table)
     if not isTable(table) then
         return end
@@ -293,18 +357,24 @@ function isListOfAssignedStrings(list, ignoreFunctions)
     return true
 end
 
-function isListOfClass(list, class, ignoreFunctions)
-    if not isList(list) then return end
-
+function isTableOfAssignedStrings(list, ignoreFunctions)
+    if not isTable(list) then return end
     if not isBoolean(ignoreFunctions) then
         ignoreFunctions = true
     end
-    for _, v in ipairs(list) do
-        if not ignoreFunctions and isFunction(v) then
-            return false end
+    for _, v in pairs(list) do
+        if not ignoreFunctions and isFunction(v) then return false end
+        if not isAssignedString(v) then return false end
+    end
+    return true
+end
 
-        if not isClass(v, class) then
-            return false end
+function isListOfClass(list, class, ignoreFunctions)
+    if not isList(list) then return end
+    if not isBoolean(ignoreFunctions) then ignoreFunctions = true end
+    for _, v in ipairs(list) do
+        if not ignoreFunctions and isFunction(v) then return false end
+        if not isClass(v, class) then return false end
     end
     return true
 end
@@ -313,6 +383,305 @@ function isDictionary( value )
     local tableType = getTableType(value)
     return tableType == "dictionary"
 end
+
+function isDictionaryOfClass( value, class, ignoreFunctions )
+    if not isDictionary(value) then return end
+    if not isBoolean(ignoreFunctions) then ignoreFunctions = true end
+    for k, v in pairs(value) do
+        if not ignoreFunctions and isFunction(v) then return false end
+        if not isClass(v, class) then return false end
+    end
+    return true
+end
+
+function isTableOfClass( value, class, ignoreFunctions )
+    if not isTable(value) then return end
+    return isDictionaryOfClass( value, class, ignoreFunctions )
+end
+
+local next = next
+function tableIsUnassigned(table)
+    return table == nil or not next(table)
+end
+
+function dictCount(table)
+    if not isTable(table) then
+        error("dictCount :: `table` is of type " .. type(table)) end
+
+    local count = 0
+    for k, v in pairs(table) do
+        count = count+1
+    end
+    return count
+end
+
+--- Creates and returns a list from a dicitonary
+---@param dict table A dictionary (table with keys/values)
+---@param sort any If 'true' then list will be sorted (assumed a list of strings). If a function then list will be sorted using the function as callback criteria
+---@return any list The list (if dict was dictionary; otherwise nil)
+function dictToList(dict, sort)
+    if dict == nil then return nil end
+    if not isTable(table) then return Error("dictToTable :: `table` is of type " .. type(table)) end
+    local list = {}
+    for _, item in pairs(dict) do
+        list[#list+1] = item
+    end
+    if isFunction(sort) then
+        table.sort(list, sort)
+    elseif sort == true then
+        table.sort(list)
+    end
+    return list
+end
+
+function tableAny(table, criteriaFunc)
+    if not isTable(table) then
+        error("tableAny :: `table` is of type " .. type(table)) end
+
+    if isList(table) then return #table end
+    for k, v in pairs(table) do
+        if not criteriaFunc then return true end
+        if criteriaFunc(v) then return true end
+    end
+end
+
+
+do -- |||||||||||||||||||||||||||||||   Serializing Complex Values as String   |||||||||||||||||||||||||||||||
+local function mkIndent( count )
+    local s = ""
+    for i=count,0,-1 do
+        s = s.." "
+    end
+    return s
+end
+      
+function Dump(value)
+    if type(value) ~= 'table' then
+        return tostring(value)
+    end
+
+    local s = "{ "
+    for k,v in pairs(value) do
+       if type(k) ~= 'number' then k = '"'..k..'"' end
+       s = s .. '['..k..'] = ' .. Dump(v) .. ','
+    end
+    return s .. '} '
+  end
+
+  --[[
+Parameters
+    value :: (arbitrary) Value to be serialised and formatted
+    options :: (object)
+    {
+        asJson :: (bool; default = false) Set to serialize as JSON instead of lua (makes it easier to use with many online JSON analysis tools)
+        indentSize :: (int; default = 2) Specifies indentation size (no. of spaces)
+        deep :: (bool; default=false) Specifies whether to dump the object with recursive information or "shallow" (just first level of graph)
+    }
+  ]]--
+DumpPrettyOptions = {
+    asJson = false,
+    indentSize = 2,
+    deep = false,             -- boolean or number (number can control how many levels to present for 'deep')
+    includeFunctions = false,
+    skipKeys = nil            -- #list of assigned strings; names of values/functions to be ignored (this can help alleviate recursion)
+}
+
+function DumpPrettyOptions:New()
+    return DCAF.clone(DumpPrettyOptions)
+end
+
+function DumpPrettyOptions:JSON( value )
+    self.asJson = value or true
+    return self
+end
+
+function DumpPrettyOptions:IndentWize( value )
+    self.indentSize = value or 2
+    return self
+end
+
+function DumpPrettyOptions:Deep( value )
+    if isNumber(value) then
+        value = value+1 -- ensures 1 = only show root level details, 2 = show root + second level details etc. (0 == not deep)
+    end
+    self.deep = value or true
+    return self
+end
+
+function DumpPrettyOptions:Skip(...)
+    self.skipKeys = self.skipKeys or {}
+    for i = 1, #arg, 1 do
+        self.skipKeys[arg[i]] = true
+    end
+end
+
+function DumpPrettyOptions:IsSkipped(key)
+    return self.skipKeys and self.skipKeys[key]
+end
+
+function DumpPrettyOptions:IncludeFunctions( value )
+    self.includeFunctions = value or true
+    return self
+end
+
+function DumpPretty(value, options)
+
+    options = options or DumpPrettyOptions
+    local idtSize = options.indentSize or DumpPrettyOptions.indentSize
+    local asJson = options.asJson or DumpPrettyOptions.asJson
+    local dumpedValues = { }
+
+    local function isAlreadyDumped(value)
+        for _, v in ipairs(dumpedValues) do
+            if v == value then
+                return true
+            end
+        end
+    end
+
+    local function dumpRecursive(value, ilvl)
+        if not isTable(value) then
+            if (isString(value)) then
+                return '"' .. tostring(value) .. '"'
+            end
+            return tostring(value)
+        end
+
+        local deep = options.deep
+        if isNumber(deep) then
+            deep = deep > ilvl
+        end
+        if (not deep or not DCAF.Debug) and ilvl > 0 then
+            if options.asJson then
+                return "{ }"
+            end
+            if tableIsUnassigned(value) then
+                return "{ }"
+            elseif isList(value) then
+                return "{ --[[ list (" .. #value .. " values) ]] }"
+            else
+                return "{ --[[ object/dictionary ]] }"
+            end
+        end
+
+        if isTable(value) then
+            table.insert(dumpedValues, value)
+        end
+        local s = '{\n'
+        local indent = mkIndent(ilvl * idtSize)
+
+        local function dumpKeyValue(k, v)
+            if isTable(v) and isTable(v.__index) and not isAlreadyDumped(v) then
+                table.insert(dumpedValues, v)
+                for ik, iv in pairs(v.__index) do
+                    dumpKeyValue(ik, iv)
+                end
+            end
+
+            if (options.includeFunctions or type(v) ~= "function") then
+                if isAlreadyDumped(v) then
+                    if asJson then
+                        s = s .. indent..'"'..k..'"'..' : ' .. " {},\n"
+                    else
+                        if isNumber(k) then
+                            s = s .. indent..'['..k..']'..' = { --[[ recursive table ]] },\n'
+                        else
+                            s = s .. indent..'["'..k..'"]'..' = { --[[ recursive table ]] },\n'
+                        end
+                    end
+                else -- if not options:IsSkipped(k) then
+                    if (asJson) then
+                        s = s .. indent..'"'..k..'"'..' : '
+                    else
+                        if type(k) ~= 'number' then k = '"'..k..'"' end
+                        s = s .. indent.. '['..k..'] = '
+                    end
+                        s = s .. dumpRecursive(v, ilvl+1, idtSize) .. ',\n'
+                end
+            end
+        end
+        for k, v in pairs(value) do
+            dumpKeyValue(k, v)
+        end
+        return s .. mkIndent((ilvl-1) * idtSize) .. '}'
+    end
+
+    return dumpRecursive(value, 0)
+end
+
+function DumpPrettyJson(value, options)
+    options = (options or DumpPrettyOptions:New()):AsJson()
+    return DumpPretty(value, options)
+end
+
+function DumpPrettyDeep(value, options)
+    if isNumber(options) then
+        options = DumpPrettyOptions:New():Deep(options)
+    elseif isTable(options) then
+        options = options:Deep()
+    else
+        options = DumpPrettyOptions:New():Deep()
+    end
+    return DumpPretty(value, options)
+end
+end
+
+
+function Trace( message )
+    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
+    if (DCAF.Trace) then
+        BASE:E("DCAF-TRC @"..timestamp.." ===> "..tostring(message))
+    end
+    if (DCAF.TraceToUI) then
+        MESSAGE:New("DCAF-TRC: "..message):ToAll()
+    end
+end
+
+function Debug( message )
+    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
+    if (DCAF.Debug) then
+        BASE:E("DCAF-DBG @"..timestamp.." ===> "..tostring(message))
+    end
+    if (DCAF.DebugToUI) then
+        MESSAGE:New("DCAF-DBG: "..message):ToAll()
+    end
+end
+
+function DebugIf( criteriaFunc, message )
+    if not criteriaFunc() then return end
+    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
+    if (DCAF.Debug) then
+        BASE:E("DCAF-DBG @"..timestamp.." ===> "..tostring(message))
+    end
+    if (DCAF.DebugToUI) then
+        MESSAGE:New("DCAF-DBG: "..message):ToAll()
+    end
+end
+
+function Warning( message, value )
+    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
+    BASE:E("DCAF-WRN @"..timestamp.."===> "..tostring(message))
+    if (DCAF.TraceToUI or DCAF.DebugToUI) then
+        MESSAGE:New("DCAF-WRN: "..message):ToAll()
+    end
+    return value
+end
+
+function Error( message, value )
+    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
+    BASE:E("DCAF-ERR @"..timestamp.."===> "..tostring(message) .. " " .. BASE.Debug.traceback())
+    if (DCAF.TraceToUI or DCAF.DebugToUI) then
+        MESSAGE:New("DCAF-ERR: "..message):ToAll()
+    end
+    return value
+end
+
+VariableValue = {
+    ClassName = "VariableValue",
+    ----
+    Value = 100,           -- #number - fixed value)
+    Variance = nil         -- #number - variance (0.0 --> 1.0)
+}
 
 --[[
 Resolves a UNIT from an arbitrary source
@@ -423,8 +792,6 @@ end
 --- Returns the unit of a group that is closest to a specified location
 ---@param group any Can be #GROUP, #UNIT, or name of group/unit. Must be resolvable to a #GROUP
 ---@param location any Can be anything that can be resolved into a #DCAF.Location
----@return closestUnit object The closest unit
----@return closestDistance number The distance between the closest unit and `location`
 function getGroupClosestUnit(group, location)
     local validGroup = getGroup(group)
     if not validGroup then return Error("getGroupClosestUnit :: could not resolve `group`: " .. DumpPretty(group)) end
@@ -476,6 +843,457 @@ Color = {
     White = {1,1,1},
 }
 
+do -- |||||||||||||||||||||||||||||||    DCAF Menu System    |||||||||||||||||||||||||||||||
+local DCAF_Menu_DB = {
+    _nextID = 0,
+    _index = {
+        -- key   = [scope?]/[menu path]
+        -- value = #DCAF.Menu
+    },
+    -- _menus = {
+    --     -- key   = menu id
+    --     -- value = #DCAF.Menu
+    -- },
+    _childMenus = {
+        -- key   = menu id
+        -- value = #DCAF.Menu
+    },
+}
+
+DCAF.Menu = {
+    ClassName = "DCAF.Menu",
+    ----
+    ID = 0,
+    ParentID = 0,
+    CountChildren = 0,
+    Menu = nil,             -- MOOSE MENU
+    Path = ""
+}
+
+function DCAF_Menu_DB:GetKeyAndPath(parent, text, group, coalition)
+    local path = parent.Path.."/"..text
+    local key
+    if group then
+        key = group.GroupName..path
+    elseif coalition then
+        local validCoalition = Coalition.Resolve(coalition)
+        key = validCoalition..path
+    else
+        key = path
+    end
+    return key, path
+end
+
+function DCAF_Menu_DB:Add(parent, menu, text, group, coalition)
+    local key, path = self:GetKeyAndPath(parent, text, group, coalition)
+    if self._index[key] then return false, "Menu with same path and scope already created: "..key end
+    local id = self:GetNextID()
+    menu.ID = id
+    self._index[key] = menu
+    menu.ParentID = parent.ID
+    menu.Key = key
+    menu.Path = path
+    if parent.ID == 0 then return true end
+    local childMenus = self._childMenus[parent.ID] or {}
+    childMenus[id] = menu
+    parent.CountChildren = parent.CountChildren + 1
+    return true
+end
+
+function DCAF_Menu_DB:Remove(menu, removeEmptyParent)
+    Debug(DCAF.Menu.ClassName..":Remove :: "..menu.Path.." :: removeEmptyParent: "..Dump(removeEmptyParent).." :: menu.Menu: "..DumpPretty(menu.Menu))
+    if menu.Group then
+        local groupId = menu.Group:GetID()
+        missionCommands.removeItemForGroup(groupId, menu.Menu)
+    elseif menu.Coalition then
+        missionCommands.removeItemForCoalition(menu.Coalition, menu.Menu)
+    else
+        missionCommands.removeItem(menu.Menu)
+    end
+    self._index[menu.Key] = nil
+    local parent = self:GetParent(menu)
+    if not parent then return end
+    parent.CountChildren = parent.CountChildren - 1
+    if not removeEmptyParent or parent.CountChildren > 0 then return end
+    parent:Remove(false)
+end
+
+function DCAF_Menu_DB:RemoveChildren(menu)
+    local children = DCAF_Menu_DB:GetChildren(menu)
+    if not children then return self end
+
+Debug("nisse - DCAF_Menu_DB:RemoveChildren :: children: "..DumpPrettyDeep(children, 1).." :: #children: "..Dump(#children))
+    for _, child in ipairs(children) do
+Debug("nisse - DCAF_Menu_DB:RemoveChildren :: removes child: "..child.Path.."..")
+        local ok, err = pcall(function() child:Remove(false) end)
+        if not ok then return Error("WTF?! "..DumpPrettyDeep(err, 2)) end
+    end
+
+end
+
+function DCAF_Menu_DB:Get(id) return self._menus[id] end
+
+--- Returns next ID of a new menu
+function DCAF_Menu_DB:GetNextID()
+    self._nextID = self._nextID + 1
+    return self._nextID
+end
+
+--- Returns the parent menu of a (child) menu
+--- @param menu table Child menu
+function DCAF_Menu_DB:GetParent(menu)
+    local key = menu.Key
+    local i = findLastOccurrence(key, '/')
+    if not i then return end
+    local prefix = string.sub(key, 1, i-1)
+    return self._index[prefix]
+end
+
+--- Returns all child menus for a specified menu
+---@param menu table The parent menu
+function DCAF_Menu_DB:GetChildren(menu)
+    local prefix = '^'..escapePattern(menu.Key)
+    local children = {}
+    local text = menu:GetText()
+    for key, child in pairs(self._index) do
+        if child:GetText() ~= text and string.find(key, prefix) then children[#children+1] = child end
+    end
+    return children
+end
+
+--- Returns a value indicating whether the menu is a root menu (has no parent)
+---@return boolean
+function DCAF.Menu:IsRoot() return self.ParentID == DCAF.Menu.ID end
+
+function DCAF.Menu:_resolveGroupOrCoalition(groupOrCoalition, errorPrefix)
+    local group
+    local coalition
+    if groupOrCoalition ~= nil then
+        if isGroup(groupOrCoalition) then
+            group = groupOrCoalition
+        else
+            local validCoalition = Coalition.Resolve(groupOrCoalition, true)
+            if validCoalition then coalition = groupOrCoalition end
+        end
+        if group == nil and coalition == nil then
+            if errorPrefix then  return Error(errorPrefix.." :: `groupOrCoalition` must be group or coalition, but was: "..DumpPretty(groupOrCoalition)) end
+            return
+        end
+    end
+    return group, coalition
+end
+
+--- Creates a new F10 menu for all, a coalition, or a group
+---@param text string The text to be used
+---@param groupOrCoalition any (optional) [default = visible for all] A coalition, or a group
+function DCAF.Menu:New(text, groupOrCoalition)
+    if not isAssignedString(text) then return Error("DCAF.Menu:New :: `text` must be assigned string, but was: "..DumpPretty(text)) end
+    local menu = DCAF.clone(DCAF.Menu)
+    local group, coalition
+    if self.Group then
+        group = self.Group
+    elseif self.Coaltiion then
+        coalition = self.Coaltion
+    elseif groupOrCoalition then
+        group, coalition = self:_resolveGroupOrCoalition(groupOrCoalition, "DCAF.Menu:New :: "..self.Path.."/"..text)
+    end
+    local ok, msg = DCAF_Menu_DB:Add(self, menu, text, group, coalition)
+    if not ok then return Error("DCAF.Menu:NewCommand :: cannot add :: "..msg) end
+    if group then
+        menu.Group = group
+        local groupId = group:GetID()
+        menu.Menu = missionCommands.addSubMenuForGroup(groupId, text, self.Menu)
+Debug("nisse - DCAF.Menu:New :: menu.Menu: "..DumpPretty(menu.Menu))
+        -- menu.Menu = MENU_GROUP:New(group, text, self.Menu)
+    elseif coalition then
+        menu.Coalition = coalition
+        menu.Menu = missionCommands.addSubMenuForCoalition(coalition, text, self.Menu)
+        -- menu.Menu = MENU_COALITION:New(coalition, text, self.Menu)
+    else
+        menu.Menu = missionCommands.addSubMenu(text, self.Menu)
+        -- menu.Menu = MENU_MISSION:New(text, self.Menu)
+    end
+    if DCAF.Debug then
+        local scope
+        if menu.Group then
+            scope = menu.Group.GroupName
+        elseif menu.Coalition then
+            scope = Coalition.Resolve(menu.Coalition)
+        else
+            scope = "(mission)"
+        end
+        Debug(DCAF.Menu.ClassName..":New :: "..menu.Path.." :: scope: "..scope)
+    end
+    return menu
+end
+
+local nisse_count = 0
+
+--- Creates a new F10 menu command, 
+---@param text string The text to be used
+---@param func any A function to be called to handle the command
+---@param groupOrCoalition any (optional) [default = visible for all] A coalition, or a group
+function DCAF.Menu:NewCommand(text, func, groupOrCoalition)
+    if not isAssignedString(text) then return Error("DCAF.Menu:NewCommand :: `text` must be assigned string, but was: "..DumpPretty(text)) end
+    if not isFunction(func) then return Error("DCAF.Menu:NewCommand :: `func` must be a function, but was: "..DumpPretty(func)) end
+    local menu = DCAF.clone(DCAF.Menu)
+    local group, coalition
+    if self.Group then
+        group = self.Group
+    elseif self.Coaltiion then
+        coalition = self.Coaltion
+    elseif groupOrCoalition then
+        group, coalition = self:_resolveGroupOrCoalition(groupOrCoalition, "DCAF.Menu:NewCommand :: "..self.Path.."/"..text)
+    end
+    local ok, msg = DCAF_Menu_DB:Add(self, menu, text, group, coalition)
+    if not ok then return Error("DCAF.Menu:NewCommand :: cannot add :: "..msg) end
+    if group then
+        menu.Group = group
+        local groupId = group:GetID()
+        menu.Menu = missionCommands.addCommandForGroup(groupId, text, self.Menu, function() func(menu) end)
+Debug("nisse - DCAF.Menu:NewCommand :: menu.Menu: "..DumpPretty(menu.Menu))
+        -- menu.Menu = MENU_GROUP_COMMAND:New(group, text, self.Menu, function() func(menu) end)
+    elseif coalition then
+        menu.Coalition = coalition
+        menu.Menu = missionCommands.addCommandForCoalition(coalition, text, self.Menu, function() func(menu) end)
+        -- menu.Menu = MENU_COALITION_COMMAND:New(coalition, text, self.Menu, function() func(menu) end)
+    else
+        menu.Menu = missionCommands.addCommand(text, self.Menu, function() func(menu) end)
+        -- menu.Menu = MENU_MISSION_COMMAND:New(text, self.Menu, function() func(menu) end)
+    end
+    if DCAF.Debug then
+        local scope
+        if menu.Group then
+            scope = menu.Group.GroupName
+        elseif menu.Coalition then
+            scope = Coalition.Resolve(menu.Coalition)
+        else
+            scope = "(mission)"
+        end
+        Debug(DCAF.Menu.ClassName..":NewCommand :: "..menu.Path.." :: scope: "..scope)
+    end
+    return menu
+end
+
+function DCAF.Menu:GetText()
+    return self.Menu[#self.Menu]
+    -- local path = self.Path
+    -- local i = findLastOccurrence(path, '/')
+    -- return string.sub(path, i+1, string.len(path))
+end
+
+function DCAF.Menu:GetAll(scope)
+    local prefix
+    if isGroup(scope) then
+        prefix = scope.GroupName
+    elseif isAssignedString() then
+        prefix = scope
+    elseif isNumber(scope) then
+        local coalition = Coalition.Resolve(scope)
+        if not coalition then return Error("DCAF.Menu:DebugDump :: unknown numeric scope: "..scope..". Assumed coalition but could not resolve as such") end
+        prefix = coalition
+    end
+    if not prefix then return DCAF_Menu_DB._menus end
+    local menus = {}
+    prefix = '^'..escapePattern(prefix)
+    for key, menu in pairs(DCAF_Menu_DB._index) do
+        local i = string.find(key, prefix)
+        if i then menus[#menus+1] = menu end
+    end
+    return menus
+end
+
+--- Removes the menu, possible also removing the parent menu when is has no more sub menus
+---@param removeEmptyParent boolean (optional) [default = false] Will also remove its parent menu, if menu is last child menu
+function DCAF.Menu:Remove(removeEmptyParent)
+    DCAF_Menu_DB:Remove(self, removeEmptyParent)
+end
+
+--- Gets parent menu (if any)
+function DCAF.Menu:GetParent()
+    return DCAF_Menu_DB:GetParent(self)
+end
+
+--- Removes all menu's child menus
+function DCAF.Menu:RemoveChildren()
+    DCAF_Menu_DB:RemoveChildren(self)
+end
+end -- (DCAF Menu System)
+
+
+
+do -- |||||||||||||||||||||||||   Frequencies   |||||||||||||||||||||||||
+
+AM = radio.modulation.AM
+FM = radio.modulation.FM
+
+DCAF.FrequencySystems = {
+    Aviation = "aviation",
+    Maritime = "maritime"
+}
+
+DCAF.Frequency = {
+    ClassName = "DCAF.Frequency",
+    ----
+    Freq = 0,
+    Mod = AM,
+    Name = "",
+    System = DCAF.FrequencySystems.Aviation,
+    Notes = ""
+}
+
+
+local DCAF_FrequenciesDB = {
+    [DCAF.FrequencySystems.Aviation] = { --[[ keys = Frequency names, values = #DCAF.Frequency]]  },
+}
+
+DCAF.Frequencies = {
+    ClassName = "DCAF.Frequencies",
+    ----
+    System = DCAF.FrequencySystems.Aviation
+}
+
+---Adds a #DCAF.Frequency to the frequency database
+---@param frequency table #DCAF.Frequency
+function DCAF.Frequencies:Add(frequency)
+    if not isClass(frequency, DCAF.Frequency) then return Error("Frequencies:Add :: `frequency` must be #DCAF.Frequency, but was: " .. DumpPretty(frequency)) end
+    if not isAssignedString(frequency.Name) then return Error("Frequencies:Add :: `frequency` (" .. frequency.Freq .. ") must be named to be added") end
+    local system = DCAF_FrequenciesDB[self.System]
+    local key = string.lower(frequency.Name)
+    local exists = system[key]
+    if exists then return Error("DCAF.Frequencies:Add :: frequency with same name ('"..frequency.Name.."') already exists", exists) end
+    system[key] = frequency
+    return frequency
+end
+
+---Adds a new frequency to the frequency system
+---@param name string Frequency identity, within its system
+---@param freq number Frequency (including decimal, if applicable)
+---@param mod string (optional) [default = "AM"] "AM" or "FM" (tip: You can use identifiers AM or FM)
+---@param notes string (optional) Specifies notes/comments/explanation for frequency
+---@return any self #DCAF.Frequency
+function DCAF.Frequencies:AddNew(name, freq, mod, notes)
+    if not isAssignedString(name) then return Error("Frequencies:AddNew :: `frequency` ("..DumpPretty(freq)..") must be named to be added") end
+    return self:Add(DCAF.Frequency:New(freq, mod, name, notes))
+end
+
+--- Adds and returns a new frequency system
+---@param systemName string Name of new frequency system
+---@return any newFrequencySystem
+function DCAF.Frequencies:AddSystem(systemName)
+    if not isAssignedString(systemName) then return Error("DCAF.Frequencies:AddSystem :: `systemName` must be assigned string, but was: " .. DumpPretty(systemName)) end
+    local key = string.lower(systemName)
+    local exists = DCAF_FrequenciesDB[key]
+    if exists then return Warning("DCAF.Frequencies:AddSystem :: System with name '"..systemName.."' already exists", exists) end
+    DCAF_FrequenciesDB[key] = {}
+    return self:GetSystem(systemName)
+end
+
+--- Returns a frequency system
+---@param systemName string Name of requested frequency system (eg. 'aviation' or 'maritime')
+---@return any frequencySystem #DCAF.Frequencies
+function DCAF.Frequencies:GetSystem(systemName)
+    if not isAssignedString(systemName) then return Error("DCAF.Frequencies:GetSystem :: `systemName` must be assigned string, but was: " .. DumpPretty(systemName)) end
+    local key = string.lower(systemName)
+    if not DCAF_FrequenciesDB[key] then return Error("DCAF.Frequencies:GetSystem :: Frequency system with name '"..systemName.."' is not supported") end
+    local frequencies = DCAF.clone(DCAF.Frequencies)
+    frequencies.System = key
+    return frequencies
+end
+
+--- Returns a frequency (#DCAF.Frequency)
+---@param name string Name of requested frequency
+---@param systemName string (optional) [defaul = current frequency system name] Specifies an alternative frequency system
+---@return any frequency A #DCAF.Frequency if it is supported by frequency system; otherwise nil
+function DCAF.Frequencies:Get(name, systemName)
+    if not isAssignedString(name) then return Error("DCAF.Frequencies:Get :: `name` must be assigned string, but was: " .. DumpPretty(name)) end
+    local systemKey
+    if isAssignedString(systemName) then
+        systemKey = string.lower(systemName)
+    else
+        systemKey = self.System
+    end
+    local system = DCAF_FrequenciesDB[systemKey]
+    if not system then return Error("DCAF.Frequencies:Get :: frequency "..systemKey.."/"..name.." was not found") end
+    local key = string.lower(name)
+    local freq = system[key]
+    if not freq then return Error("DCAF.Frequencies:Get :: frequency "..systemKey.."/"..name.." was not found") end
+    return freq
+end
+
+--- Gets a named frequency from current frequency system
+---@param name string Identifies requested frequency
+---@param systemName string (optional) [default = current system] Specifies a frequency system to query for the requested frequency
+---@return any frequency A #DCAF.Frequency if one exists in the frequency system; otherwise nil
+function DCAF.Frequency:Get(name, systemName)
+    local system = DCAF.Frequencies
+    if isAssignedString(systemName) then
+        system = DCAF.Frequencies:GetSystem(systemName)
+        if not system then return end
+    end
+    return system:Get(name, "")
+end
+
+---Creates and returns a new frequency
+---@param freq number The frequency value, including decimal (if applicable)
+---@param mod string "AM" or "FM" (tip: use radio.modulation enum)
+---@return table self
+function DCAF.Frequency:New(freq, mod, name, notes)
+    local f = DCAF.clone(DCAF.Frequency)
+    if not isNumber(freq) then return Error("DCAF.Frequency:New :: ") end
+Debug("nisse - DCAF.Frequency:New :: AM: " .. Dump(AM) .. " :: mod: " .. Dump(mod))
+    if isAssignedString(mod) and mod ~= AM and mod ~= FM then return Error("DCAF.Frequency:New :: invalid modulation: " .. mod) end
+    if name ~= nil and not isAssignedString(name) then return Error("DCAF.Frequency:NewNamed :: `name` must be assigned string, but was: " .. DumpPretty(name)) end
+    if notes ~= nil and not isAssignedString(notes) then return Error("DCAF.Frequency:New :: notes must be string, but was: " .. DumpPretty(notes)) end
+    f.Freq = freq
+    f.Mod = mod or DCAF.Frequency.Mod
+    f.Name = name
+    f.Notes = notes
+    return f
+end
+
+---Compares frequency to other frequency and returns a value to indicate they are considered equal
+---@param otherFrequency table #DCAF.Frequency
+---@return boolean areEqual
+function DCAF.Frequency:Equals(otherFrequency)
+    if not isClass(otherFrequency, DCAF.Frequency) then return Error("DCAF.Frequency:Equals :: `otherFrequency` must be #"..DCAF.Frequency.ClassName..", but was: "..DumpPretty(otherFrequency)) end
+    return self.Freq == otherFrequency.Freq and self.Mod == otherFrequency.Mod and self.Name == otherFrequency.Name
+end
+
+-- Aviation
+local aviation = DCAF.Frequencies
+aviation:AddNew("Guard", 243, AM, "Aviation guard frequency")
+
+-- Maritime
+local maritime = DCAF.Frequencies:AddSystem("Maritime")
+maritime:AddNew(  "6", 150.300, AM, "Intership safety communication")
+maritime:AddNew(  "8", 150.400, AM, "General intership communication")
+maritime:AddNew(  "9", 150.450, AM, "Alternate calling channel (regional use)")
+maritime:AddNew( "10", 150.500, AM, "Commercial port operations")
+maritime:AddNew( "11", 150.550, AM, "Port operations")
+maritime:AddNew( "12", 150.600, AM, "Port operations / VTS")
+maritime:AddNew( "13", 150.650, AM, "Bridge-to-bridge communication (safety)")
+maritime:AddNew( "14", 150.700, AM, "Port operations / VTS")
+maritime:AddNew( "15", 150.750, AM, "Onboard communications (low power)")
+maritime:AddNew( "16", 151.800, AM, "Distress, safety, and hailing")
+maritime:AddNew( "17", 150.850, AM, "Onboard communications (low power)")
+maritime:AddNew("22A", 151.100, AM, "U.S. Coast Guard liaison")
+maritime:AddNew( "18", 300.250, AM, "Alternate calling channel (regional use)") -- DCAF specific
+maritime:AddNew( "19", 300.500, AM, "Alternate calling channel (regional use)") -- DCAF specific
+maritime:AddNew( "67", 150.370, AM, "Safety and navigation (often SAR coordination)")
+maritime:AddNew( "68", 150.425, AM, "Non-commercial communications")
+maritime:AddNew( "69", 150.475, AM, "Non-commercial communications")
+maritime:AddNew( "70", 150.525, AM, "Digital Selective Calling (DSC) only")
+maritime:AddNew( "71", 150.575, AM, "Non-commercial communications")
+maritime:AddNew( "72", 150.625, AM, "Intership communication (non-commercial)")
+maritime:AddNew( "73", 150.675, AM, "Intership communication")
+maritime:AddNew( "77", 150.875, AM, "Intership communication (non-commercial)")
+maritime:AddNew( "82", 150.225, AM, "Government and military use (ITU-designated)")
+maritime:AddNew( "83", 151.275, AM, "Government and military use (ITU-designated)")
+maritime:AddNew("87B", 151.975, AM, "AIS data transmission")
+maritime:AddNew("88B", 152.025, AM, "AIS data transmission")
+
+end
 
 -- ///////////////////////////////////////////////////////////////////
 -- Unit information (see https://en.wikipedia.org/wiki/NATO_Joint_Military_Symbology)
@@ -858,7 +1676,8 @@ function stringStartsWith(s, prefix)
     if not isAssignedString(s) or not isAssignedString(prefix) then
         return end
 
-    return string.find(s, prefix) == 1
+    local pattern = '^'..escapePattern(prefix)
+    return string.find(s, pattern)
 end
 
 function stringSplit(s, sep)
@@ -1118,6 +1937,7 @@ function Skill.GetHarmonized(skill, targetSkill, maxVariation)
     return Skill.FromNumeric(numSkill)
 end
 
+do -- |||||||||||||||||||||||||||||    Phonetic Alphabet    |||||||||||||||||||||||||||||
 PhoneticAlphabet = {
     Upper = {
         A = "Alpha",
@@ -1293,7 +2113,7 @@ Debug("nisse - PhoneticAlphabet:ConvertNumber :: teens :: number: " .. Dump(numb
         else
             s = self.Teens[tostring(number)]
         end
-    else
+    elseif number > 0 then
         if s then
             s = s .. " " .. self.Digit[tostring(number)]
         else
@@ -1303,23 +2123,25 @@ Debug("nisse - PhoneticAlphabet:ConvertNumber :: teens :: number: " .. Dump(numb
     return s
 end
 
-function PhoneticAlphabet:ConvertFrequencyNumber(number, decimalPositions)
+--- Converts a decimal value into phonetic 'speech', standardized for frequencies
+---@param number any The frequency value
+---@param decimals any (optional) Can be used to limit or 'pad' the decimal element to a specified length (eg. .2 becomes "two zero zero")
+---@return string phoneticFrequency
+function PhoneticAlphabet:ConvertFrequencyNumber(number, decimals)
+Debug("nisse - PhoneticAlphabet:ConvertFrequencyNumber:: "..Dump(number).." :: decimals: "..Dump(decimals))
     if not isNumber(number) then return Error("PhoneticAlphabet:ConvertFrequencyNumber :: `number` must be numeric value, but was: " .. DumpPretty(number), tostring(number)) end
+    if not isNumber(decimals) then decimals = 1 end
     local integer = math.floor(number)
-    local decimals = number - integer
-    local integerText = self:Convert(tostring(integer))
-    local decimalText = string.sub(tostring(decimals), 3)
-    if isNumber(decimalPositions) then
-        while decimalPositions > string.len(decimals) do
-            decimalText = decimalText .. "0"
-        end
+    local text = tostring(number)
+    local integerText = tostring(integer)
+    local i = string.len(integerText)+1
+    local decimalText = string.sub(text, i+1, string.len(text))
+    i = string.len(decimalText)
+    while i < decimals do
+        decimalText = decimalText.."0"
+        i = string.len(decimalText)
     end
-    if string.len(decimalText) > 0 then
-        decimalText = self:Convert(decimalText)
-    else
-        decimalText = self:Convert("0")
-    end
-    return integerText .. " decimal " .. decimalText
+    return self:Convert(integerText) .. " decimal " .. self:Convert(decimalText)
 end
 
 function DCAF.trimInstanceFromName( name, qualifierAt )
@@ -1330,6 +2152,14 @@ function DCAF.trimInstanceFromName( name, qualifierAt )
         return name end
 
     return string.sub(name, 1, qualifierAt-1), string.sub(name, qualifierAt)
+end
+
+--- Returns phonetic representation of frequency
+---@param decimals any  (optional) Can be used to 'pad' the decimal element to a specified length (eg. .2 becomes "two zero zero")
+function DCAF.Frequency:PhoneticText(decimals)
+    return PhoneticAlphabet:ConvertFrequencyNumber(self.Freq, decimals)
+end
+
 end
 
 function DCAF.parseSpawnedUnitName(name)
@@ -1652,48 +2482,6 @@ function ReciprocalAngle(angle)
     return (angle + 180) % 360
 end
 
-function trim(s)
-    return (s:gsub("^%s*(.-)%s*$", "%1"))
-end
-
-function trimSpawnIndex(s)
-    local start, stop = string.find(s, "#%d+[-]%d+$")
-    if not start then
-        return s end
-
-    local trimmed = string.sub(s, 1, start-1)
-    return trimmed
-end
-
-function inString( s, pattern )
-    return string.find(s, pattern ) ~= nil
-end
-
-function newString(pattern, count)
-    if not isAssignedString(pattern) then
-        error("newString :: `pattern` must be an assigned string, but was: " .. DumpPretty(pattern)) end
-
-    if not isNumber(count) then
-        error("newString :: `count` must be a number, but was: " .. type(count)) end
-
-    local s = pattern
-    for i = 1, count-1, 1 do
-        s = s .. pattern
-    end
-    return s
-end
-
-function findFirstNonWhitespace( s, start )
-    local sLen = string.len(s)
-    for i=start, sLen, 1 do
-        local c = string.sub(s, i, i)
-        if (c ~= ' ' and c ~= '\n' and c ~= '\t') then
-            return i
-        end
-    end
-    return nil
-end
-
 function concatList(list, separator, itemSerializeFunc)
     if not isString(separator) then
         separator = ", "
@@ -1869,33 +2657,6 @@ function tableFilter( table, func )
     return result, count
 end
 
-local next = next
-function tableIsUnassigned(table)
-    return table == nil or not next(table)
-end
-
-function dictCount(table)
-    if not isTable(table) then
-        error("dictCount :: `table` is of type " .. type(table)) end
-
-    local count = 0
-    for k, v in pairs(table) do
-        count = count+1
-    end
-    return count
-end
-
-function tableAny(table, criteriaFunc)
-    if not isTable(table) then
-        error("tableAny :: `table` is of type " .. type(table)) end
-
-    if isList(table) then return #table end
-    for k, v in pairs(table) do
-        if not criteriaFunc then return true end
-        if criteriaFunc(v) then return true end
-    end
-end
-
 function listRandomItemWhere(list, criteriaFunc)
     if not isTable(list) then
         error("listRandomItem :: `list` must be table but was " .. type(list)) end
@@ -1950,13 +2711,13 @@ function listShuffleItems(list)
     end
 end
 
---- Iterates items in a table while applying a time interval between each iteration
--- @param #table table - the table to be iterated
--- @param #funciton func - a function to be called back for each key/value pair in the table
--- @param #number interval - The interval (seconds) between each iteration
--- @param #number delay - (optional; default=0) Delays the first iteration
-function tableIterateDelayed(table, func, interval, delay)
-    if not isTable(table) then return Error("tableIterateDelayed :: `table` must be a table, but was: " .. DumpPretty(table)) end
+--- Iterates items in a table or SET while applying a time interval between each iteration
+--- @param source table The table to be iterated
+--- @param func function A function to be called back for each key/value pair in the table
+--- @param interval number The interval (seconds) between each iteration
+--- @param delay number (optional) [default=0] Delays the first iteration
+function tableIterateDelayed(source, func, interval, delay)
+    if not isTable(source) then return Error("tableIterateDelayed :: `table` must be a table, but was: " .. DumpPretty(source)) end
     if not isFunction(func) then return Error("tableIterateDelayed :: `func` must be a function, but was: " .. DumpPretty(func)) end
     if not isNumber(interval) then return Error("tableIterateDelayed :: `interval` must be a number, but was: " .. DumpPretty(interval)) end
     if not isNumber(delay) then delay = 0 end
@@ -1970,7 +2731,7 @@ function tableIterateDelayed(table, func, interval, delay)
         end
     end
 
-    for key, value in pairs(table) do
+    for key, value in pairs(source) do
         scheduleIDs[key] = DCAF.delay(function()
             if cancelled then return end
             local result = func(key, value)
@@ -2067,31 +2828,48 @@ function COORDINATE:ToKeypad()
 end
 
 --- Activates groups in a staggered fashion (applying a delay between each activation)
--- @param #table groups - a table where all values are #GROUP objects
--- @param #number interval - (optional; default=5) An interval (seconds) between each activation
--- @param #function onActivatedFunc - (optional) Function to be called back for each activated group. Passes the key and group as arguments
--- @param #number delay - (optional; default=0) Delays the first activation
--- @param #Any order - (optional) When specified, the `groups` table will be sorted on a value found in each group. Value can be `true` or a string to specify the name of the index to be used for the activation order
-function activateGroupsStaggered(groups, interval, onActivatedFunc, delay, order)
-    if not isTable(groups) then return Error("activateGroupsStaggered :: `table` must be a #table, but was: " .. DumpPretty(table)) end
+--- @param source any A table, SET_GROUP, or SET_STATIC containing all groups/statics to be activated
+--- @param interval number (optional) [default=5] An interval (seconds) between each activation
+--- @param onActivatedFunc function (optional) Function to be called back for each activated group. Passes the key and group as arguments
+--- @param delay number (optional) [default=0] Delays the first activation
+--- @param order any (optional) When specified, the `groups` table will be sorted on a value found in each group. Value can be `true` or a string to specify the name of the index to be used for the activation order
+function activateStaggered(source, interval, onActivatedFunc, delay, order)
+    Debug("activateStaggered :: source: " .. DumpPretty(source) .. " :: interval: " .. DumpPretty(interval) .. " :: onActivatedFunc: " .. DumpPretty(onActivatedFunc) .. " :: delay: " .. DumpPretty(delay) .. " :: order: " .. DumpPretty(order))
+    if isClass(source, SET_BASE) then
+        local table = {}
+        if isClass(source, SET_GROUP) then
+            source:ForEachGroup(function(group) table[#table+1] = group end)
+        elseif isClass(source, SET_STATIC) then
+            source:ForEachStatic(function(static) table[#table+1] = static end)
+        end
+        source = table
+    end
+
+    if not isTable(source) then return Error("activateStaggered :: `table` must be a #table or #SET_BASE, but was: " .. DumpPretty(table)) end
     if not isNumber(interval) then interval = 5 end
+    local activatedGroups = {}
 
     if order ~= true and not isAssignedString(order) then
-        tableIterateDelayed(groups, function(key, group)
-            if not isGroup(group) then return Error("activateGroupsStaggered :: item with key [" .. key .. "] was not a #GROUP :: IGNORES") end
+        tableIterateDelayed(source, function(key, group)
+            local validGroup = getGroup(group)
+            if not validGroup then return Error("activateStaggered :: item with key [" .. key .. "] was not a #GROUP :: group: " .. DumpPretty(group) .. " :: IGNORES") end
+            group = validGroup
             if not group:IsActive() then
                 group:Activate()
-                if isFunction(onActivatedFunc) then onActivatedFunc(key, group) end
-                Debug("activateGroupsStaggered :: group " .. group.GroupName .. " was activated")
+                activatedGroups[#activatedGroups+1] = group
+                if isFunction(onActivatedFunc) then pcall(function() onActivatedFunc(group, key) end) end
+                Debug("activateStaggered :: group " .. group.GroupName .. " was activated")
             end
         end, interval, delay)
-        return groups
+        return activatedGroups
     end
 
     if order == true then order = DCAF.DataKey end
     local sorted = {}
-    for k, group in pairs(groups) do
-        if not isGroup(group) then return Error("activateGroupsStaggered :: item with key [" .. key .. "] was not a #GROUP :: IGNORES") end
+    for k, group in pairs(source) do
+        local validGroup = getGroup(group)
+        if not validGroup then return Error("activateStaggered :: item with key [" .. k .. "] could not be resolved as a #GROUP :: IGNORES", activatedGroups) end
+        group = validGroup
         group.__key = k
         sorted[#sorted+1] = group
     end
@@ -2105,10 +2883,10 @@ function activateGroupsStaggered(groups, interval, onActivatedFunc, delay, order
         if not group:IsActive() then
             group:Activate()
             if isFunction(onActivatedFunc) then onActivatedFunc(group.__key, group) end
-            Debug("activateGroupsStaggered :: group " .. group.GroupName .. " was activated")
+            Debug("activateStaggered :: group " .. group.GroupName .. " was activated")
         end
     end, interval, delay)
-    return groups
+    return sourceactivatedGroups
 end
 
 function VariableValue:New(value, variance)
@@ -2174,6 +2952,10 @@ function VariableValue:GetValue(variance)
         return getBoundedValue()
     end
     return getValue(self.Value, variance)
+end
+
+function roundToNearest(number, n)
+    return math.floor((number + n / 2) / n) * n
 end
 
 RoundMethod = {
@@ -2730,54 +3512,6 @@ end
 local function log( rank, message )
 end
 
-function Trace( message )
-    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
-    if (DCAF.Trace) then
-        BASE:E("DCAF-TRC @"..timestamp.." ===> "..tostring(message))
-    end
-    if (DCAF.TraceToUI) then
-        MESSAGE:New("DCAF-TRC: "..message):ToAll()
-    end
-end
-
-function Debug( message )
-    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
-    if (DCAF.Debug) then
-        BASE:E("DCAF-DBG @"..timestamp.." ===> "..tostring(message))
-    end
-    if (DCAF.DebugToUI) then
-        MESSAGE:New("DCAF-DBG: "..message):ToAll()
-    end
-end
-
-function DebugIf( criteriaFunc, message )
-    if not criteriaFunc() then return end
-    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
-    if (DCAF.Debug) then
-        BASE:E("DCAF-DBG @"..timestamp.." ===> "..tostring(message))
-    end
-    if (DCAF.DebugToUI) then
-        MESSAGE:New("DCAF-DBG: "..message):ToAll()
-    end
-end
-
-function Warning( message )
-    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
-    BASE:E("DCAF-WRN @"..timestamp.."===> "..tostring(message))
-    if (DCAF.TraceToUI or DCAF.DebugToUI) then
-        MESSAGE:New("DCAF-WRN: "..message):ToAll()
-    end
-end
-
-function Error( message, value )
-    local timestamp = UTILS.SecondsToClock( UTILS.SecondsOfToday() )
-    BASE:E("DCAF-ERR @"..timestamp.."===> "..tostring(message) .. " " .. BASE.Debug.traceback())
-    if (DCAF.TraceToUI or DCAF.DebugToUI) then
-        MESSAGE:New("DCAF-ERR: "..message):ToAll()
-    end
-    return value
-end
-
 ---------------------------- FILE SYSTEM -----------------------------
 
 -- https://www.geeks3d.com/hacklab/20210901/how-to-check-if-a-directory-exists-in-lua-and-in-python/
@@ -2804,11 +3538,6 @@ function files.exists( path )
 end
 
 ------------------------------------------------------------------
-Coalition = {
-    Blue = "blue",
-    Red = "red",
-    Neutral = "neutral"
-}
 
 GroupType = {
     Air = "Air",
@@ -3155,13 +3884,20 @@ function DCAF.Location:NewRaw(name, source, coordinate, coalition)
     local location = DCAF.clone(DCAF.Location)
     location.Name = name
     location.Source = source
-    location.Coordinate = coordinate
+    location.Coalition = coalition
+    if isFunction(coordinate) then
+        location._funcGetCoordinate = coordinate
+    else
+        location.Coordinate = coordinate
+    end
     return location
 end
 
-function DCAF.Location:NewNamed(name, source, coalition, throwOnFail)
+function DCAF.Location:NewNamed(name, source, coalition, throwOnFail, debug)
     if source == nil then
         error("DCAF.Location:New :: `source` cannot be unassigned") end
+
+    if debug then Debug("DCAF.Location:NewNamed :: source: " .. DumpPretty(source)) end
 
     if not isBoolean(throwOnFail) then
         throwOnFail = true
@@ -3266,18 +4002,14 @@ function DCAF.Location.ResolveZone(source)
     end
 end
 
-function DCAF.Location:New(source, coalition, throwOnFail)
-    return DCAF.Location:NewNamed(nil, source, coalition, throwOnFail)
+function DCAF.Location:New(source, coalition, throwOnFail, debug)
+    return DCAF.Location:NewNamed(nil, source, coalition, throwOnFail, debug)
 end
 
-function DCAF.Location.Resolve(source, coalition)
-    if isClass(source, DCAF.Location.ClassName) then
-        return source end
-
-    local d = DCAF.Location:New(source, coalition, false)
-    if d then
-        return d
-    end
+function DCAF.Location.Resolve(source, coalition, debug)
+    if isClass(source, DCAF.Location.ClassName) then return source end
+    local d = DCAF.Location:New(source, coalition, false, debug)
+    if d then return d end
 end
 
 function DCAF.Location:SetAltitude(value, asl)
@@ -3314,6 +4046,106 @@ end
 
 function DCAF.Location:CircleToAll(radius, coalition, color, alpha, fillColor, fillAlpha, lineType, readOnly, text)
     return self:GetCoordinate():CircleToAll(radius, coalition, color, alpha, fillColor, fillAlpha, lineType, readOnly, text)
+end
+
+function DCAF.Location:Get3DDistance(location)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return end
+    location = validLocation
+    local coord = self:GetCoordinate()
+    if not coord then return Error("DCAF.Location:Get3DDistance :: cannot get own location coordinate") end
+    local coordLocation = location:GetCoordinate()
+    if not coordLocation then return Error("DCAF.Location:Get3DDistance :: cannot get other location's coordinate") end
+    return coord:Get3DDistance(coordLocation)
+end
+
+--- Gets distance (meters) to another location
+---@param location any Any object resolvable as #DCAF.Location
+---@return any distance The distance to location, if coordinates can be produced; otherwise nil
+function DCAF.Location:Get2DDistance(location)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return end
+    location = validLocation
+    local coord = self:GetCoordinate()
+    if not coord then return Error("DCAF.Location:Get2DDistance :: cannot get own location coordinate") end
+    local coordLocation = location:GetCoordinate()
+    if not coordLocation then return Error("DCAF.Location:Get2DDistance :: cannot get other location's coordinate") end
+    return coord:Get2DDistance(coordLocation)
+end
+
+--- Specifies two locations and registers a handler function to be invoked once those locations are inside a specified range
+---@param range number The specified range (meters)
+---@param location any Any object resolvable as a #DCAF.Location
+---@param funcInRange function Handler function to be called back once locations are within range of each other
+---@param exitRange number (optional) When specified (meters), function will automatically stop monitoring for locations coming within mutual range
+---@param interval number (optional) [default = 1] Specifies an interval (seconds) to be used for monitoring locations coming within mutual range
+---@param funcExit function (optional) Handler function to be called back once locations are outside of `exitRange`
+---@return self any self
+function DCAF.Location:WhenIn2DRange(range, location, funcInRange, exitRange, interval, funcExit)
+    if not isNumber(range) or range < 1 then return Error("DCAF.Location:WhenIn2DRange :: `range` must be positive number, but was: " .. DumpPretty(range), self) end
+    if not isFunction(funcInRange) then return Error("DCAF.Location:WhenIn2DRange :: `handlerInRange` must be function, but was: " .. DumpPretty(funcInRange), self) end
+    if funcExit and not isFunction(funcExit) then return Error("DCAF.Location:WhenIn2DRange :: `handlerExit` must be function, but was: " .. DumpPretty(funcExit)) end
+
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return Error("DCAF.Location:WhenIn2DRange :: could not resolve `locationB`: " .. DumpPretty(location), self) end
+    location = validLocation
+    Debug("DCAF.Location:WhenIn2DRange :: "..self.Name.." :: range: "..range.." :: location: "..location.Name.." :: interval: "..DumpPretty(interval))
+
+    if isNumber(exitRange) and exitRange <= range then return Error("DCAF.Location:WhenIn2DRange :: `exitRange` must be greater than `range` ("..range.."), but was: "..exitRange) end
+
+    if not isNumber(interval) or interval < 1 then interval = 1 end
+
+
+    local schedulerID
+    local function endScheduler(msg)
+        if msg then Error("DCAF.Location:WhenIn2DRange :: " .. msg) end
+        pcall(function() DCAF.stopScheduler(schedulerID) end)
+    end
+
+    schedulerID = DCAF.startScheduler(function()
+        local distance = self:Get2DDistance(location)
+        if distance > range then
+            if exitRange and distance >= exitRange then
+                if funcExit then pcall(function() funcExit(distance) end) end
+                return endScheduler()
+            end
+            return
+        end
+        -- in range
+        endScheduler()
+        local ok, err = pcall(function() funcInRange(distance) end)
+        if not ok then Error("DCAF.Location:WhenIn2DRange :: error in 'funcInRange' handler: " .. DumpPretty(err)) end
+    end, interval)
+    return self
+end
+
+function DCAF.Location:WhenAirInRange(range, funcInRange, coalition, ignoreAI, breakOnFirst, measureSlantRange, interval)
+    if not isNumber(range) or range < 1 then return Error("DCAF.Location:WhenAirIn2DRange :: `range` must be positive number, but was: " .. DumpPretty(range), self) end
+    if not isFunction(funcInRange) then return Error("DCAF.Location:WhenAirIn2DRange :: `handlerInRange` must be function, but was: " .. DumpPretty(funcInRange), self) end
+    if coalition ~= nil then
+        local validCoalition = Coalition.Resolve(coalition)
+        if not validCoalition then return Error("DCAF.Location:WhenAirIn2DRange :: cannot resolve coalition: "..DumpPretty(coalition)) end
+    end
+    if not isNumber(interval) or interval < 1 then interval = 1 end
+    if not isBoolean(ignoreAI) then ignoreAI = false end
+    if not isBoolean(breakOnFirst) then breakOnFirst = true end
+    if not isBoolean(measureSlantRange) then
+        if self:IsAirborne() then measureSlantRange = true end
+    end
+    local shedulerID
+    shedulerID = DCAF.startScheduler(function()
+        local units = ScanAirborneUnits(self, range, coalition, breakOnFirst, measureSlantRange, nil, true, ignoreAI)
+        if not units:Any() then return end
+        local scan = { Units = units.Units, EndScan = true }
+        local ok, response = pcall(function() funcInRange(scan) end)
+        if ok then
+            if scan.EndScan then
+                pcall(function() DCAF.stopScheduler(shedulerID) end)
+            end
+        else
+            Error("DCAF.Location:WhenAirIn2DRange :: error invoking funcInRange: "..DumpPretty(response))
+        end
+    end, interval)
 end
 
 function DCAF.Location:OffsetDistance(value)
@@ -3358,6 +4190,9 @@ function DCAF.Location:OffsetAltitude(value)
 end
 
 function DCAF.Location:GetCoordinate(enforceAltitude, asl)
+    if self._funcGetCoordinate then
+        return self._funcGetCoordinate(self)
+    end
     if self.IsControllable then
         self.Coordinate = self.Source:GetCoordinate()
     end
@@ -4640,184 +5475,6 @@ function EstimatedDistance( feet )
     local calc = feet / f + 1
     calc = UTILS.Round(calc * 2, 0) / 2 - 1
     return calc * f
-  end
-
-  local function mkIndent( count )
-    local s = ""
-    for i=count,0,-1 do
-      s = s.." "
-    end
-    return s
-  end
-
-  function Dump(value)
-    if type(value) ~= 'table' then
-        return tostring(value)
-    end
-
-    local s = "{ "
-    for k,v in pairs(value) do
-       if type(k) ~= 'number' then k = '"'..k..'"' end
-       s = s .. '['..k..'] = ' .. Dump(v) .. ','
-    end
-    return s .. '} '
-  end
-
-  --[[
-Parameters
-    value :: (arbitrary) Value to be serialised and formatted
-    options :: (object)
-    {
-        asJson :: (bool; default = false) Set to serialize as JSON instead of lua (makes it easier to use with many online JSON analysis tools)
-        indentSize :: (int; default = 2) Specifies indentation size (no. of spaces)
-        deep :: (bool; default=false) Specifies whether to dump the object with recursive information or "shallow" (just first level of graph)
-    }
-  ]]--
-DumpPrettyOptions = {
-    asJson = false,
-    indentSize = 2,
-    deep = false,             -- boolean or number (number can control how many levels to present for 'deep')
-    includeFunctions = false,
-    skipKeys = nil            -- #list of assigned strings; names of values/functions to be ignored (this can help alleviate recursion)
-}
-
-function DumpPrettyOptions:New()
-    return DCAF.clone(DumpPrettyOptions)
-end
-
-function DumpPrettyOptions:JSON( value )
-    self.asJson = value or true
-    return self
-end
-
-function DumpPrettyOptions:IndentWize( value )
-    self.indentSize = value or 2
-    return self
-end
-
-function DumpPrettyOptions:Deep( value )
-    if isNumber(value) then
-        value = value+1 -- ensures 1 = only show root level details, 2 = show root + second level details etc. (0 == not deep)
-    end
-    self.deep = value or true
-    return self
-end
-
-function DumpPrettyOptions:Skip(...)
-    self.skipKeys = self.skipKeys or {}
-    for i = 1, #arg, 1 do
-        self.skipKeys[arg[i]] = true
-    end
-end
-
-function DumpPrettyOptions:IsSkipped(key)
-    return self.skipKeys and self.skipKeys[key]
-end
-
-function DumpPrettyOptions:IncludeFunctions( value )
-    self.includeFunctions = value or true
-    return self
-end
-
-function DumpPretty(value, options)
-
-    options = options or DumpPrettyOptions
-    local idtSize = options.indentSize or DumpPrettyOptions.indentSize
-    local asJson = options.asJson or DumpPrettyOptions.asJson
-    local dumpedValues = { }
-
-    local function isAlreadyDumped(value)
-        for _, v in ipairs(dumpedValues) do
-            if v == value then
-                return true
-            end
-        end
-    end
-
-    local function dumpRecursive(value, ilvl)
-        if not isTable(value) then
-            if (isString(value)) then
-                return '"' .. tostring(value) .. '"'
-            end
-            return tostring(value)
-        end
-
-        local deep = options.deep
-        if isNumber(deep) then
-            deep = deep > ilvl
-        end
-        if (not deep or not DCAF.Debug) and ilvl > 0 then
-            if options.asJson then
-                return "{ }"
-            end
-            if tableIsUnassigned(value) then
-                return "{ }"
-            elseif isList(value) then
-                return "{ --[[ list (" .. #value .. " values) ]] }"
-            else
-                return "{ --[[ object/dictionary ]] }"
-            end
-        end
-
-        if isTable(value) then
-            table.insert(dumpedValues, value)
-        end
-        local s = '{\n'
-        local indent = mkIndent(ilvl * idtSize)
-
-        local function dumpKeyValue(k, v)
-            if isTable(v) and isTable(v.__index) and not isAlreadyDumped(v) then
-                table.insert(dumpedValues, v)
-                for ik, iv in pairs(v.__index) do
-                    dumpKeyValue(ik, iv)
-                end
-            end
-
-            if (options.includeFunctions or type(v) ~= "function") then
-                if isAlreadyDumped(v) then
-                    if asJson then
-                        s = s .. indent..'"'..k..'"'..' : ' .. " {},\n"
-                    else
-                        if isNumber(k) then
-                            s = s .. indent..'['..k..']'..' = { --[[ recursive table ]] },\n'
-                        else
-                            s = s .. indent..'["'..k..'"]'..' = { --[[ recursive table ]] },\n'
-                        end
-                    end
-                else -- if not options:IsSkipped(k) then
-                    if (asJson) then
-                        s = s .. indent..'"'..k..'"'..' : '
-                    else
-                        if type(k) ~= 'number' then k = '"'..k..'"' end
-                        s = s .. indent.. '['..k..'] = '
-                    end
-                        s = s .. dumpRecursive(v, ilvl+1, idtSize) .. ',\n'
-                end
-            end
-        end
-        for k, v in pairs(value) do
-            dumpKeyValue(k, v)
-        end
-        return s .. mkIndent((ilvl-1) * idtSize) .. '}'
-    end
-
-    return dumpRecursive(value, 0)
-end
-
-function DumpPrettyJson(value, options)
-    options = (options or DumpPrettyOptions:New()):AsJson()
-    return DumpPretty(value, options)
-end
-
-function DumpPrettyDeep(value, options)
-    if isNumber(options) then
-        options = DumpPrettyOptions:New():Deep(options)
-    elseif isTable(options) then
-        options = options:Deep()
-    else
-        options = DumpPrettyOptions:New():Deep()
-    end
-    return DumpPretty(value, options)
 end
 
 function DistanceToStringA2A( meters, estimated )
@@ -4867,8 +5524,6 @@ function GetRelativeDirection(heading, bearing)
     elseif rd > 180 then
         rd = rd - 360
     end
-if rd < -180 or rd > 180 then error("GetRelativeDirection (WTF!)") end -- nisse --
-    return rd
 end
 
 --- Returns an object with three values to describe the relative position between two locations
@@ -5869,16 +6524,16 @@ Debug("nisse - FeintAttack :: SHOT event :: e: " .. DumpPretty(e))
             weapon:destroy()
             group:EnableEmission(false)
             Debug("FeintAttack :: " .. group.GroupName .. " :: weapon neutralized :: countAttempt: " .. (countAttempt or 1))
-            DCAF.delay(function()
-                if not event.IsEventEnded then
-                    group:EnableEmission(true)
-                end
-                local success, position = pcall(function() return weapon:getPoint() end)
-                if success then
-                    trigger.action.explosion(position, 5)
-                    Debug("FeintAttack :: " .. group.GroupName .. " :: exploded weapon")
-                end
-            end, 0.5)
+            -- DCAF.delay(function()
+            --     if not event.IsEventEnded then
+            --         group:EnableEmission(true)
+            --     end
+            --     local success, position = pcall(function() return weapon:getPoint() end)
+            --     if success then
+            --         trigger.action.explosion(position, 5)
+            --         Debug("FeintAttack :: " .. group.GroupName .. " :: exploded weapon")
+            --     end
+            -- end, 0.5)
         end
         DCAF.delay(function()
             neutralizeWeapon()
@@ -6459,7 +7114,8 @@ function _e:onEvent( event )
     local function addInitiatorAndTarget( event )
         if event.initiator then
             if event.initiator and not event.IniUnit then
-                event.IniUnit = UNIT:Find(event.initiator)
+                local unitName = event.initiator:getName()
+                event.IniUnit = getUnit(unitName)
             end
             if event.IniUnit then
                 event.IniUnitName = event.IniUnit.UnitName
@@ -7058,9 +7714,7 @@ Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
     return controllable
 end
 
-
---- Gets the unit that is closest to a specified coordinate
-function GROUP:GetClosestUnit(location)
+function getGroupClosestUnit(group, location)
     local loc = DCAF.Location.Resolve(location)
     if not loc then
         error("GROUP:GetClosestUnit :: cannot resolve #DCAF.Location from: " .. DumpPretty(location)) end
@@ -7079,6 +7733,11 @@ function GROUP:GetClosestUnit(location)
         end
     end
     return closestUnit
+end
+
+--- Gets the unit that is closest to a specified coordinate
+function GROUP:GetClosestUnit(location)
+    return getGroupClosestUnit(self, location)
 end
 
 function _missionEventsAircraftFuelStateMonitor:Start(key, units, fuelState, func)
@@ -11435,31 +12094,22 @@ function getReversedTurnCoordinates(coordStart, rightTurn, coordEnd, countPoints
 end
 
 --- Generates list of #COORDINATE from reference location, two radial values, normally from left to right, and an interval distance
--- @param #number refLocation - can be anything compatible with #DCAF.Location
--- @param #number distance - arc distance from refLocation
--- @param #number radialStart - start radial of arc
--- @param #number radialEnd - end radial of arc
--- @param #number interval - (optional) number of degrees between generated coordinates
--- @param #boolen rightToLeft - (optional) specifies whther arc coordinates should be generated from right to left
+--- @param refLocation number Can be anything compatible with #DCAF.Location
+--- @param distance number Arc distance from refLocation
+--- @param radialStart number Start radial of arc
+--- @param radialEnd number (optional) [default = radialStart] End radial of arc
+--- @param interval number (optional) [default = 15] Number of degrees between generated coordinates
+--- @param rightToLeft boolean rightToLeft (optional) [default = false] Specifies whther arc coordinates should be generated from right to left
 function getArcCoordinates(refLocation, distance, radialStart, radialEnd, interval, rightToLeft)
+    Debug("getArcCoordinates :: refLocation: " .. DumpPretty(refLocation) .. " :: distance: "..Dump(distance).." :: radialStart: "..DumpPretty(radialStart).." :: radialEnd: "..DumpPretty(radialEnd).." :: interval: "..DumpPretty(interval).." :: rightToLeft: "..DumpPretty(rightToLeft))
     local validLocation = DCAF.Location.Resolve(refLocation)
-    if not validLocation then
-        error("getArcCoordinates :: could not resolve `refLocation`: " .. DumpPretty(refLocation)) end
-
+    if not validLocation then return Error("getArcCoordinates :: could not resolve `refLocation`: " .. DumpPretty(refLocation)) end
     local coord = validLocation:GetCoordinate()
 -- Debug("nisse - getArcCoordinates :: coord: " .. DumpPretty(coord))
-    if not isNumber(distance) then
-        error("getArcCoordinates :: `distance` must be number, but was: " .. DumpPretty(distance)) end
-
-    if not isNumber(radialStart) then
-        error("getArcCoordinates :: `radialStart` must be number, but was: " .. DumpPretty(radialStart)) end
-
-    if not isNumber(radialEnd) then
-        error("getArcCoordinates :: `radialEnd` must be number, but was: " .. DumpPretty(radialEnd)) end
-
-    if not isNumber(interval) then
-        interval = 15
-    end
+    if not isNumber(distance) then return Error("getArcCoordinates :: `distance` must be number, but was: " .. DumpPretty(distance)) end
+    if not isNumber(radialStart) then return Error("getArcCoordinates :: `radialStart` must be number, but was: " .. DumpPretty(radialStart)) end
+    if not isNumber(radialEnd) then radialEnd = radialStart end -- return Error("getArcCoordinates :: `radialEnd` must be number, but was: " .. DumpPretty(radialEnd)) end
+    if not isNumber(interval) then interval = 15 end
 
     local inc = 1
     if rightToLeft then
@@ -13881,9 +14531,6 @@ end
 function UNIT:SubstituteWithStatic(damage, damageAge)
     return SubstituteWithStatic(self, damage, damageAge)
 end
-
----- SRS ----
-
 
 -------------- LOADED
 

@@ -369,6 +369,7 @@ Debug("nisse - DCAF.TrainingRange:Spawn :: source: " .. DumpPrettyDeep(source, 1
             if not spawn then
                 spawn = getSpawn(source)
                 self.Spawns[source] = spawn
+                if not spawn then return Error(" DCAF.TrainingRange:SpawnAndCallback :: cannot resolve SPAWN from source: " .. DumpPretty(source)) end
             end
         elseif isClass(source, SPAWN) then
             spawn = source

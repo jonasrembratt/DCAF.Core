@@ -322,6 +322,10 @@ function DCAF.Interceptor:_monitorApproach() -- i == #DCAF.Interceptor
             -- just look for the target unit (more efficient)...
             local coordTargetUnit = me.TargetUnit:GetCoordinate()
             if not coordTargetUnit then return end
+            local coordOwn = me.OwnLocation:GetCoordinate()
+            if not coordOwn then
+                return self:Stop()
+            end
             local distance = me.OwnLocation:GetCoordinate():Get2DDistance(coordTargetUnit)
             if distance > TriggerMinDistance then return end
             units =  { [0] = { Unit = self.TargetUnit, Distance = distance } }
@@ -500,7 +504,7 @@ local function detectLoweredGear(interceptor)
 end
 
 function DCAF.Interceptor:_monitorIntercept()
--- MessageTo(self.Group, self.Unit.UnitName .. " - nisse - INTERCEPTING...")
+MessageTo(self.Group, self.Unit.UnitName .. " - nisse - INTERCEPTING...")
     local TriggerMaxDistance = 250 -- meters
 
     self.State = DCAF_Interceptor_State.Intercepting
@@ -525,7 +529,7 @@ function DCAF.Interceptor:_monitorIntercept()
             local rp = GetRelativePosition(me.OwnLocation, info.Unit)
             local debug_wasInInterceptArea
             local inInterceptArea = checkInInterceptArea(rp, TriggerMaxDistance)
-            if DCAF.Interceptor._isDebug then
+            if self:IsDebug() then
                 if not debug_wasInInterceptArea and inInterceptArea then
                     MessageTo(nil, "IN INTERCEPT AREA")
                 end
@@ -667,7 +671,7 @@ function DCAF.Interceptor:OnSignalIntercept(unit, signal)
     local msg = self:GetActor() .. " signals interception to " .. unit.UnitName .. " (" .. signal .. ")"
     Debug("DCAF.Interceptor:OnSignalIntercept :: " .. msg)
     self:InhibitSignals(30)
-    if DCAF.Interceptor._isDebug then
+    if self:IsDebug() then
         MessageTo(nil, msg)
     end
     self:Intercept(unit, signal)
@@ -699,7 +703,7 @@ end
 -- @remarks This method can be overridden but the default implementation always invokes the `FollowMe` function
 function DCAF.Interceptor:OnIntercepted(unit, signal)
     if not self.Unit then return self end
-    if DCAF.Interceptor._isDebug then
+    if self:IsDebug() then
         local actor = self.Unit:GetPlayerName()
         if not actor then actor = self.Unit.UnitName end
         MessageTo(nil, unit:GetGroup().GroupName .. " is INTERCEPTED by " .. actor .. "(" .. signal .. ")")
@@ -859,7 +863,7 @@ function DCAF.Interceptor:FollowerRelease(restart, divert, debug_reason)
     if not self.FollowerGroup then return end
 
     Debug("DCAF.Interceptor:FollowerRelease :: follower group: " .. self.FollowerGroup.GroupName .. " :: lead: " .. self.Unit.UnitName .. " :: reason: " .. Dump(debug_reason) .. " :: divert: " .. Dump(divert))
-    if DCAF.Interceptor._isDebug then
+    if self:IsDebug() then
         MessageTo(nil, "Intercepted group - " .. self.FollowerGroupName .. " was released (" .. debug_reason .. ")")
     end
 
@@ -926,11 +930,13 @@ function DCAF.Interceptor:FollowerLand(airbase, runway, restart)
     end
 end
 
-function DCAF.Interceptor.Debug(value)
+function DCAF.Interceptor:Debug(value)
     if not isBoolean(value) then value = true end
-    DCAF.Interceptor._isDebug = value
-    return DCAF.Interceptor
+    self._debug = value
+    return self
 end
+
+function DCAF.Interceptor:IsDebug() return self._debug end
 
 -- --- Adds player menus that allows interceptor group some control/tools
 -- -- @param #MENU parentMenu - (optional) Can be used to specify a parent menu for the player menus

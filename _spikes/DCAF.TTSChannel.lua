@@ -1,21 +1,4 @@
--- Relies on MOOSE, and Google voice synthetization https://cloud.google.com/text-to-speech/docs/voices)
-
-DCAF.Frequency = {
-    Freq = 0,
-    Mod = radio.modulation.AM
-}
-
-function DCAF.Frequency:New(freq, mod)
-    local f = DCAF.clone(DCAF.Frequency)
-    if not isNumber(freq) then return Error("DCAF.Frequency:New :: ") end
-    f.Freq = freq
-    f.Mod = mod or DCAF.Frequency.Mod
-    return f
-end
-
-Frequencies = {
-    Guard = DCAF.Frequency:New(243)
-}
+-- Relies on MOOSE, and Google voice synthesisation https://cloud.google.com/text-to-speech/docs/voices)
 
 local TTSChannel_DEFAULTS = {
     VoiceNormal = "en-GB-Wavenet-F",
@@ -141,8 +124,8 @@ end
 --- Creates, initializes, and returns a new #DCAF.TTSChannel
 --- @param callSign string (optional) [default = 'TOP DOG'] Specifies the channel call sign
 --- @param frequency number (optional [default = 357.000] Specifies the frequency for the channel. Number (frequency) -or- a #DCAF.Frequency; if the latter modulation can also be passed in that object
---- @param modulation number (optional) [default = radio.modulation.AM] Specifies the modulation for the channel
---- @param coalition number (optional) [default = coalition.side.BLUE] Specifies the modulation for the channel
+--- @param modulation any (optional) [default = radio.modulation.AM] Specifies the modulation for the channel
+--- @param coalition any (optional) [default = coalition.side.BLUE] Specifies the modulation for the channel
 function DCAF.TTSChannel:New(callSign, frequency, modulation, coalition)
     local freq, mod = resolveFreqAndMod(frequency, modulation)
     local channel = DCAF.clone(DCAF.TTSChannel)
@@ -316,21 +299,22 @@ function DCAF.TTSChannel:IsActual()
 end
 
 --- Transmits a message, to be read by a synthetic voice at the specified frequency and modulation (see `:New` function)
--- @param #string text - The textual message to be transmitted
-function DCAF.TTSChannel:Message(text, callsign, isActual, dash, isReplay)
-
-    Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text))
-Debug("nisse - DCAF.TTSChannel:Message :: self._variables: " .. DumpPretty(self._variables))
-
+--- @param text string The textual message to be transmitted
+---@param callSign string (optional) A call sign, to override any already configured call sign (see Callsign)
+---@param isActual boolean (optional) [default = false] Specifies whether the "actual" voice should be used see :InitVoiceActual
+---@param dash number (optional) Specifies a dash number, to be added to the call sign (allows flexibility and makes it easy to portray mor complex military structure) 
+---@param isReplay boolean (optional) [default = false] Specifies whether the message is a replay (has already been transmitted)
+function DCAF.TTSChannel:Message(text, callSign, isActual, dash, isReplay)
+    Debug("DCAF.TTSChannel:Message :: text: " .. Dump(text) .. " :: callSign: " .. Dump(callSign) .. " :: isActual: " .. Dump(isActual) .. " :: isReplay: " .. Dump(isReplay))
     if not isAssignedString(text) then
         return Error("DCAF.TTSChannel:Message :: `text` must be assigned string, but was: " .. DumpPretty(text)) end
 
     local function substituteVariables()
-        callsign = callsign or self.Callsign
+        callSign = callSign or self.Callsign
         if self:IsActual() then
-            callsign = callsign .. " Actual"    
+            callSign = callSign .. " Actual"    
         end
-        text = string.gsub(text, "%[CALLSIGN%]", callsign)
+        text = string.gsub(text, "%[CALLSIGN%]", callSign)
         local greeting = self:GetGreetingPhrase()
         if greeting then
             text = string.gsub(text, "%[GREETING%]", greeting)
@@ -572,7 +556,7 @@ Debug("nisse - DCAF.TTSChannel:Message :: self._variables: " .. DumpPretty(self.
         return "||||||||||||||||||||||||||||||||||||||||||||||||||||||||||| TTS [" .. sFrequency .. "] |||||||||||||||||||||||||||||||||||||||||||||||||||||||||"
     end
 
-    local function getTransctipText(message, multiline)
+    local function getTranscriptText(message, multiline)
         local text_tts
         if multiline then
             text_tts = message
@@ -619,7 +603,7 @@ Debug("nisse - DCAF.TTSChannel:Message :: self._variables: " .. DumpPretty(self.
  
         local function doSend()
             if not isReplay then
-                self:AddToMsgLog(text, callsign, isActual, dash)
+                self:AddToMsgLog(text, callSign, isActual, dash)
             end
             Debug("DCAF.TTSChannel:Message :: freq: " .. Dump(self.Frequency) .. " :: mod: " .. self.Modulation .. " :: gender: " .. Dump(gender) .. " :: culture: " .. Dump(culture) .. " :: voice: " .. Dump(voice)  .. " :: coalition: " .. Dump(self.Coalition) .. " :: isSimulatedTTS: " .. Dump(isSimulatedTTS) )
             Debug("DCAF.TTSChannel:Message :: text: '" .. text .. "'")
@@ -629,7 +613,7 @@ Debug("nisse - DCAF.TTSChannel:Message :: self._variables: " .. DumpPretty(self.
                 local duration = self.TTS_Simulated_Duration or DCAF.TTSChannel.TTS_Simulated_Duration
                 MessageTo(nil, header, duration + delay)
                 local isMultiLine = self.Is_TTS_Simulated_Multi_Line or DCAF.TTSChannel.Is_TTS_Simulated_Multi_Line
-                local text_tts = getTransctipText(text_processed, isMultiLine)
+                local text_tts = getTranscriptText(text_processed, isMultiLine)
                 DCAF.delay(function()
                     MessageTo(nil, text_tts, duration)
                 end, delay)
@@ -639,7 +623,7 @@ Debug("nisse - DCAF.TTSChannel:Message :: self._variables: " .. DumpPretty(self.
             if self._transcriptScope then
                 local header = getTranscriptHeader()
                 MessageTo(self._transcriptScope, header, self._transcriptDuration)
-                local text = getTransctipText(text_processed, true)
+                local text = getTranscriptText(text_processed, true)
                 MessageTo(self._transcriptScope, text, self._transcriptDuration)
             end
         end
@@ -808,6 +792,10 @@ function DCAF.TTSChannel.Call:New(ttsChannel, message, seconds, id, funcCallback
     return call
 end
 
+function DCAF.TTSChannel.Call:Cancel()
+    self._isCancelled = true
+end
+
 DCAF.TTSChannel.CallSequence = {
     ClassName = "DCAF.TTSChannel.CallSequence",
     ----
@@ -828,9 +816,11 @@ function DCAF.TTSChannel.CallSequence:Execute()
     local delay = 0
     for _, call in ipairs(self.Calls) do
         call.SchedulerID = DCAF.delay(function()
-            call.Channel:Send(call.Message)
-            call.SchedulerID = nil
             if call.Callback then pcall(function() call.Callback(call) end) end
+            if not call._isCancelled then
+                call.Channel:Send(call.Message)
+                call.SchedulerID = nil
+            end
         end, delay)
         delay = delay + call.Seconds
     end

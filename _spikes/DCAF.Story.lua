@@ -1,3 +1,193 @@
+do -- |||||||||||||||||||||||||    Game Master menu - GM_Menu    |||||||||||||||||||||||||
+
+Blue = coalition.side.BLUE
+
+GM_Menu = {
+    ClassName = "GM_Menu",
+    ----
+}
+
+local menu_ID = 0
+local menus_DB = {
+    -- key   = menu path
+    -- value = #GM_Menu
+}
+
+function menus_DB:getNextID()
+    menu_ID = menu_ID + 1
+    return menu_ID
+end
+
+function menus_DB:add(gm_menu)
+    self[gm_menu._path] = gm_menu
+end
+
+function menus_DB:remove(gm_menu)
+    local menuPath = gm_menu._path
+    for path, menu in pairs(self) do
+        if stringStartsWith(path, menuPath) then
+            self[path] = nil
+        end
+    end
+end
+
+function menus_DB:getSubMenus(gm_menu)
+Debug("nisse - menus_DB:getSubMenus :: self: "..DumpPretty(self))
+    local subMenus = {}
+    for path, menu in pairs(self) do
+if isFunction(menu) then Debug("nisse - path: "..Dump(path).." "..DCAF.StackTrace()) end
+        if menu._parent == gm_menu then
+            subMenus[#subMenus+1] = menu
+        end
+    end
+    return subMenus
+end
+
+function GM_Menu:New(text, parentMenu, group)
+    if not isAssignedString(text) then text = "[GM ONLY!]" end
+    Debug("GM_Menu:New :: " .. text .. " :: parentMenu: " .. DumpPretty(parentMenu))
+    local gmMenu = DCAF.clone(GM_Menu)
+    if not isAssignedString(text) then text = tostring(text) end
+    if isGroup(group) then
+        gmMenu._menu = MENU_GROUP:New(group, text, parentMenu)
+    else
+        gmMenu._menu = MENU_COALITION:New(Blue, text, parentMenu)
+    end
+    gmMenu._text = text
+    gmMenu._path = text
+    gmMenu._subMenuCount = gmMenu._subMenuCount or 0
+    gmMenu.ID = menus_DB:getNextID()
+    return gmMenu
+end
+
+function GM_Menu:NewCommand(text, parentMenu, func, group)
+    if not isAssignedString(text) then text = tostring(text) end
+    if not isFunction(func) then return Error("GM_Menu:NewCommand :: `func` must be function, but was: "..DumpPretty(text)) end
+    Debug("GM_Menu:NewCommand :: " .. text .. " :: parentMenu: " .. DumpPretty(parentMenu))
+    local gmMenu = DCAF.clone(GM_Menu)
+    if isGroup(group) then
+        gmMenu._menu = MENU_GROUP_COMMAND:New(group, text, parentMenu, func)
+    else
+        gmMenu._menu = MENU_COALITION_COMMAND:New(Blue, text, parentMenu, func)
+    end
+    gmMenu._text = text
+    gmMenu._path = text
+    gmMenu._subMenuCount = gmMenu._subMenuCount or 0
+    gmMenu.ID = menus_DB:getNextID()
+    return gmMenu
+end
+
+function GM_Menu:Ensure()
+    if not GM_Menu._root then GM_Menu._root = GM_Menu:New() end
+    return GM_Menu._root
+end
+
+local nisse_debug_menu
+
+function GM_Menu:AddMenu(text)
+    Debug("GM_Menu:AddMenu :: " .. text)
+if text == "Select Flight" then
+    Debug("nisse - select flight menu (xxx) :: self._parent: "..DumpPretty(self._parent).." self._parent._menu: "..DumpPrettyDeep(self._parent._menu, 2))
+    if self._parent._menu == nisse_debug_menu then Error("WTF?! (aaa)") end
+end
+    
+    if self == GM_Menu then
+        GM_Menu:Ensure()
+    else
+        self._subMenuCount = self._subMenuCount or 0
+        self._subMenuCount = self._subMenuCount + 1
+    end
+    local subMenu = DCAF.clone(GM_Menu)
+    subMenu.ID = menus_DB:getNextID()
+    if not isAssignedString(text) then text = tostring(text) end
+    subMenu._menu = MENU_COALITION:New(Blue, text, self._menu or GM_Menu._root._menu)
+
+if text == "DEBUG" then -- NISSE
+    Debug("nisse - DEBUG menu...")
+    nisse_debug_menu = subMenu._menu
+end 
+-- if text == "Select Flight" then
+--     Debug("nisse - select flight menu (bbb)...")
+--     if self._parent._menu == nisse_debug_menu then Error("WTF?!") end
+-- end
+
+    subMenu._text = text
+    local path = self._path
+    if path == nil then
+        path = GM_Menu._root._path
+    end
+    subMenu._path = path .. '/' .. text
+    subMenu._parent = self
+    menus_DB:add(subMenu)
+    return subMenu
+end
+
+function GM_Menu:AddCommand(text, func)
+    Debug("GM_Menu:AddCommand :: text: "..Dump(text).." :: self: "..DumpPretty(self).." :: self._menu: "..DumpPrettyDeep(self._menu, 2))
+    if self == GM_Menu then
+        GM_Menu:Ensure()
+    end
+    self._subMenuCount = self._subMenuCount or 0
+    self._subMenuCount = self._subMenuCount + 1
+    local subMenu = DCAF.clone(GM_Menu)
+    if not isAssignedString(text) then text = tostring(text) end
+    local menu
+    local parentMenu = self._menu or GM_Menu._root._menu
+if text == "Show Progress" then
+    local _func = func
+    Debug("GM_Menu:AddCommand :: check Show Progress :: menu: "..DumpPrettyDeep(menu))
+    func = function(sm)
+        MessageTo(nil, "------\n"..DumpPrettyDeep(parentMenu, 2).."\n------")
+        _func(sm)
+    end
+end
+    menu = MENU_COALITION_COMMAND:New(Blue, text, parentMenu, function() func(subMenu) end)
+    subMenu._menu = menu
+    subMenu.ID = menus_DB:getNextID()
+    subMenu._text = text
+    subMenu._path = (self._path or GM_Menu._root._path) .. '/' .. text
+    subMenu._parent = self
+    menus_DB:add(subMenu)
+    return subMenu
+end
+
+function GM_Menu:Remove(removeEmptyParent)
+    Debug("GM_Menu:Remove :: " .. self._text .. " :: removeEmptyParent: " .. Dump(removeEmptyParent))
+    if self._menu then
+        self._menu:Remove()
+        self._menu = nil
+        menus_DB:remove(self)
+        if self._parent then
+            self._parent:_notifyRemoveSubMenu(self, removeEmptyParent)
+        end
+    end
+    return self
+end
+
+function GM_Menu:RemoveChildren()
+    Debug("GM_Menu:RemoveChildren :: " .. self._text)
+    local subMenus = menus_DB:getSubMenus(self)
+    if #subMenus == 0 then return self end
+    for _, subMenu in pairs(subMenus) do
+        subMenu:Remove(false)
+    end
+end
+
+function GM_Menu:_notifyRemoveSubMenu(menu, removeOnEmpty)
+    if self == GM_Menu then self = GM_Menu._root end
+    self._subMenuCount = self._subMenuCount - 1
+    if self._subMenus then
+        self._subMenus[menu._text] = nil
+    end
+    if self._subMenuCount == 0 and removeOnEmpty then
+        self:Remove(removeOnEmpty)
+    end
+end
+    
+end -- (Game Master menu - GM_Menu)
+
+Debug("nisse - Story (aaa)")
+
 local DCAF_Story_ID = 0
 local DCAF_Stories = {
     -- key   = #string : name of story
@@ -8,6 +198,7 @@ DCAF.Story = {
     ClassName = "DCAF.Story",
     ----
     Name = nil,             -- #string - name of story
+    gm_menu = nil
 }
 
 DCAF.StoryStartOutcome = {
@@ -138,6 +329,8 @@ end
 
 --- Starts the story. This function will invoke any internal function registered with :OnStart (if any), or it will simply mark the story as started, and then invoke the :OnStarted function
 function DCAF.Story:Start()
+    if self:IsRunning() then return end
+    Debug("DCAF.Story:Start :: "..self.Name)
     return self:_start()
 end
 
@@ -195,20 +388,71 @@ function DCAF.Story:IsStarted() return self._isStarted end
 --- Gets a value that indicates whether the story has ended
 function DCAF.Story:IsEnded() return self._isEnded end
 
---- Gets a value that indicates whether the story has startedm but not ended
+function DCAF.Story:IsRunning() return self:IsStarted() and not self:IsEnded() end
+
+--- Gets a value that indicates whether the story has started, but not ended
 function DCAF.Story:IsActive()
     return self._isStarted and not self._isEnded
 end
 
+--- Activates groups
+--- @param source any A table, SET_GROUP, or SET_STATIC to be activated
+--- @param order any (optional) When specified, the `source` will be sorted on a value found in each group. Value can be `true` or a string to specify the name of the index to be used for the activation order
+--- @param onActivatedFunc function  (optional) Function to be called back for each activated group. Passes the key and group as arguments
+--- @param delay number (optional) [default=0] Delays the first activation
+function DCAF.Story:Activate(source, order, onActivatedFunc, delay)
+    Debug("DCAF.Story:Activate :: source: " .. DumpPretty(source) .. " :: order: " .. DumpPretty(order) .. " :: delay:" .. DumpPretty(delay))
+    if isClass(source, UNIT) then
+        source = source:GetGroup()
+    end
+    if isClass(source, GROUP) then
+        if source:IsActive() then return source end
+        return source:Activate()
+    end
+    if isTableOfAssignedStrings(source) or isTableOfClass(source, GROUP) or isTableOfClass(source, STATIC) or isClass(source, SET_GROUP) or isClass(source, SET_STATIC) then
+        return self:ActivateStaggered(source, 0, order, onActivatedFunc, delay)
+    end
+    if not isTable(source) then return Error("DCAF.Story:Activate :: `source` is not expected structure: " .. DumpPrettyDeep(source, 2)) end
+
+    local activatedGroups = {}
+    for _, item in pairs(source) do
+        local groups = self:Activate(item, order, onActivatedFunc, delay)
+        if groups then listJoin(activatedGroups, groups) end
+    end
+    return activatedGroups
+end
+
 --- Activates groups in a staggered fashion (applying a delay between each activation)
--- @param #table groups - a table where all values are #GROUP objects
--- @param #number interval - (optional; default=5) An interval (seconds) between each activation
--- @param #Any order - (optional) When specified, the `groups` table will be sorted on a value found in each group. Value can be `true` or a string to specify the name of the index to be used for the activation order
--- @param #function onActivatedFunc - (optional) Function to be called back for each activated group. Passes the key and group as arguments
--- @param #number delay - (optional; default=0) Delays the first activation
-function DCAF.Story:ActivateStaggered(groups, interval, order, onActivatedFunc, delay)
-    activateGroupsStaggered(groups, interval, onActivatedFunc, delay, order)
-    return self
+--- @param source any A table, SET_GROUP, or SET_STATIC to be activated
+--- @param interval number (optional) [default=5] An interval (seconds) between each activation
+--- @param order any (optional) When specified, the `source` will be sorted on a value found in each group. Value can be `true` or a string to specify the name of the index to be used for the activation order
+--- @param onActivatedFunc function  (optional) Function to be called back for each activated group. Passes the key and group as arguments
+--- @param delay number (optional) [default=0] Delays the first activation
+function DCAF.Story:ActivateStaggered(source, interval, order, onActivatedFunc, delay)
+    Debug("DCAF.Story:ActivateStaggered :: source: " .. DumpPretty(source) .. " :: interval: " .. DumpPretty(interval) .. " :: order: " .. DumpPretty(order) .. " :: delay:" .. DumpPretty(delay))
+    return activateStaggered(source, interval, onActivatedFunc, delay, order)
+end
+
+--- Returns coordinate for a "reference location" and, optionally, removes the object
+--- @param source string A GROUP or STATIC, ort name of a GROUP/STATIC
+--- @param destroy boolean (optional) [default = true] Specifies whether to remove the object after acquiring its coordinate
+--- @return table The coordinate of the GROUP or STATIC
+function DCAF.Story:GetRefLoc(source, destroy)
+    Debug("DCAF.Story:GetRefLoc :: source: " .. DumpPretty(source) .. " :: destroy: " .. DumpPretty(destroy))
+    local function processSource(object)
+        local coordinate = object:GetCoordinate()
+        if destroy then object:Destroy() end
+        return coordinate
+    end
+
+    if not isBoolean(destroy) then destroy = true end
+    local group = getGroup(source)
+    if group then
+        return processSource(group)
+    end
+    local static = getStatic(source)
+    if static then return processSource(group) end
+    return Error("DCAF.Story:GetRefLoc :: `source` could not be resolved: " .. DumpPretty(source))
 end
 
 DCAF.StoryStarter = {
@@ -399,6 +643,7 @@ Debug("nisse - DCAF.StoryStarter:Start :: first story starts " .. UTILS.SecondsT
 end
 
 --- Defers starting a story
+--- @param story any #DCAF.Story to be deferred
 function DCAF.StoryStarter:Defer(story)
     local function suggestNextStory()
         local lowestDeferral = 99999
@@ -533,11 +778,20 @@ function DCAF.StoryStarter:_getNextInterval()
     else
         interval = self.Interval
     end
-Debug("nisse - DCAF.StoryStarter:_getNextInterval :: interval: " .. Dump(interval))
     return interval
 end
 
+function DCAF.Story:ExpectTTSChannelsAssigned(value)
+    if not isBoolean(value) then value = true end
+    self._expectTTSChannelsAssigned = value
+    return self
+end
+
 function DCAF.Story:Send(ttsChannel, message, callSign, isActual, dash, isReplay)
+    if not ttsChannel then
+        if self._expectTTSChannelsAssigned then Error("DCAF.Story:Send :: `ttsChannel` was unassigned") end
+        return
+    end
     if not isClass(ttsChannel, DCAF.TTSChannel) then return Error("DCAF.Story:Send :: `ttsChannel` must be type #" .. DCAF.TTSChannel.ClassName .. ", but was: " .. DCAF.TTSChannel.ClassName) end
     ttsChannel:Send(message, callSign, isActual, dash, isReplay)
 end
@@ -557,55 +811,559 @@ function DCAF.Story:Call(ttsChannel, message, seconds, funcCallback, id)
     return DCAF.TTSChannel.Call:New(ttsChannel, message, seconds, id, funcCallback)
 end
 
+function DCAF.Story:AssignFlight(flight)
+    Debug("DCAF.Story:AssignFlight :: flight: " .. DumpPretty(flight))
+    if not isClass(flight, DCAF.Flight) then return Error("DCAF.Story:AssignFlight :: `flight` must be "..DCAF.Flight.ClassName..", but was: "..DumpPretty(flight), self) end
+    self.AssignedFlight = flight
+    self:OnAssignedFlight(flight)
+end
+
+function DCAF.Story:CountAssignedPlayers()
+    if not self.AssignedFlight then return 0 end
+    return self.AssignedFlight.Group:GetPlayerCount()
+end
+
+function DCAF.Story:GetAssignedPlayerNames()
+    local units = self:GetAssignedUnits()
+    if not units then return end
+    local playerNames = {}
+    for _, unit in ipairs(units) do
+        if unit:IsPlayer() then playerNames[#playerNames+1] = unit:GetPlayerName() end
+    end
+    return playerNames
+end
+
+function DCAF.Story:GetAssignedUnits()
+    if not self.AssignedFlight then return end
+    return self.AssignedFlight.Group:GetUnits()
+end
+
+function DCAF.Story:OnAssignedFlight(flight)
+    Debug("DCAF.Story:OnAssignedFlight :: (not overridden; no action)")
+end
+
+function DCAF.Story:Get2DDistance(locationA, locationB)
+    local validLocationA = DCAF.Location.Resolve(locationA)
+    if not validLocationA then return Error("DCAF.Story:Get2DDistance :: `locationA` is not a valid #"..DCAF.Location.ClassName..": "..DumpPretty(locationA)) end
+    local validLocationB = DCAF.Location.Resolve(locationB)
+    if not validLocationB then return Error("DCAF.Story:Get2DDistance :: `locationB` is not a valid #"..DCAF.Location.ClassName..": "..DumpPretty(locationB)) end
+    return validLocationA:Get2DDistance(validLocationB)
+end
+
 --- Specifies two locations and registers a handler function to be invoked once those locations are inside a specified range
 ---@param range number The specified range (meters)
 ---@param locationA any Can be anything resolvable as a #DCAF.Location
 ---@param locationB any Can be anything resolvable as a #DCAF.Location
----@param handlerInRange function Handler function to be called back once locations are within range of each other
+---@param funcInRange function Handler function to be called back once locations are within range of each other
 ---@param exitRange number (optional) When specified (meters), function will automatically stop monitoring for locations coming within mutual range
 ---@param interval number (optional) [default = 1] Specifies an interval (seconds) to be used for monitoring locations coming within mutual range
----@param handlerExit function (optional) Handler function to be called back once locations are outside of `exitRange`
+---@param funcExit function (optional) Handler function to be called back once locations are outside of `exitRange`
 ---@return self any self
-function DCAF.Story:WhenIn2DRange(range, locationA, locationB, handlerInRange, exitRange, interval, handlerExit)
+function DCAF.Story:WhenIn2DRange(range, locationA, locationB, funcInRange, exitRange, interval, funcExit)
     if not isNumber(range) or range < 1 then return Error("DCAF.Story:WhenIn2DRange :: `range` must be positive number, but was: " .. DumpPretty(range), self) end
-    if not isFunction(handlerInRange) then return Error("DCAF.Story:WhenIn2DRange :: `handlerInRange` must be function, but was: " .. DumpPretty(handlerInRange), self) end
-
+    if not isFunction(funcInRange) then return Error("DCAF.Story:WhenIn2DRange :: `funcInRange` must be function, but was: " .. DumpPretty(funcInRange), self) end
+    if funcExit and not isFunction(funcExit) then return Error("DCAF.Story:WhenIn2DRange :: `funcExit` must be function, but was: " .. DumpPretty(funcExit)) end
     local validLocationA = DCAF.Location.Resolve(locationA)
     if not validLocationA then return Error("DCAF.Story:WhenIn2DRange :: could not resolve `locationA`: " .. DumpPretty(locationA), self) end
+Debug("nisse - DCAF.Story:WhenIn2DRange (eee) :: locationB: "..DumpPretty(locationB))
     local validLocationB = DCAF.Location.Resolve(locationB)
+Debug("nisse - DCAF.Story:WhenIn2DRange (fff)")
     if not validLocationB then return Error("DCAF.Story:WhenIn2DRange :: could not resolve `locationB`: " .. DumpPretty(locationB), self) end
+Debug("nisse - DCAF.Story:WhenIn2DRange (ggg)")
     locationA = validLocationA
     locationB = validLocationB
+    Debug("DCAF.Story:WhenIn2DRange :: range: "..range.." :: locationA: "..locationA.Name.." :: locationB: "..locationB.Name.." :: interval: "..DumpPretty(interval))
 
     if isNumber(exitRange) and exitRange <= range then return Error("DCAF.Story:WhenIn2DRange :: `exitRange` must be greater than `range` ("..range.."), but was: "..exitRange) end
-
     if not isNumber(interval) or interval < 1 then interval = 1 end
-
-    if handlerExit and not isFunction(handlerExit) then return Error("DCAF.Story:WhenIn2DRange :: `handlerExit` must be function, but was: " .. DumpPretty(handlerExit)) end
-
-    local schedulerID
-    local function endScheduler(msg)
-        if msg then Error("DCAF.Story:WhenIn2DRange :: " .. msg) end
-        pcall(function() DCAF.stopScheduler(schedulerID) end)
-    end
-
-    schedulerID = DCAF.startScheduler(function()
-        local coordA = locationA:GetCoordinate()
-        local coordB = locationB:GetCoordinate()
-        if not coordA or not coordB then return endScheduler("could not get coordinates from either location :: ENDS") end
-        local distance = coordA:Get2DDistance(coordB)
-        if distance > range then
-            if exitRange and distance >= exitRange then
-                if handlerExit then pcall(function() handlerExit(distance) end) end
-                return endScheduler()
-            end
-            return
-        end
-        -- in range
-        endScheduler()
-        pcall(function() handlerInRange(distance) end)
-    end, interval)
+    if funcExit and not isFunction(funcExit) then return Error("DCAF.Story:WhenIn2DRange :: `handlerExit` must be function, but was: " .. DumpPretty(funcExit)) end
+    locationA:WhenIn2DRange(range, locationB, funcInRange, exitRange, interval, funcExit)
     return self
 end
+
+function DCAF.Story:Debug(value)
+    Debug(self.Name..":Debug :: value: "..Dump(value))
+    if not isBoolean(value) then value = true end
+    self._debug = value
+    value = self:OnDebug(value)
+    if not isBoolean(value) then value = true end
+    self._debug = value
+    if self._debug then
+        if not self._menuDebug then
+            self:AddDebugCommand("Show Progress", function()
+                local flow = self:DebugFunctionsDoneText()
+                if not flow then flow = "(pending)" end
+                local text = ":::::: "..self.Name.." ::::::\n"..flow
+                MessageTo(nil, text)
+            end)
+        end
+    elseif self._gmMenu and self._gmMenu.debug then
+        self._gmMenu.debug:Remove(false)
+        self._gmMenu.debug = nil
+    end
+end
+
+function DCAF.Story:OnDebug(value)
+Debug("nisse - DCAF.Story:OnDebug :: value: "..Dump(value))
+    -- to be overridden
+    return value
+end
+
+function DCAF.Story:IsDebug()
+    return self._debug
+end
+
+function DCAF.Story:DebugMessage(message, duration)
+    if self:IsDebug() then
+        if not isNumber(duration) then duration = 30 end
+        MessageTo(nil, message, duration)
+    end
+end
+
+if DCAF.PlayerReconTask then
+function DCAF.Story:EnableReconLocationWithMapMarker(location, distanceTolerance, funcSuccess)
+    local me = self.Name
+    Debug(me..":EnableReconLocationWithMapMarker :: location: "..DumpPretty(location).." :: distanceTolerance: " .. DumpPretty(distanceTolerance).." :: funcSuccess: "..DumpPretty(funcSuccess))
+    if not isFunction(funcSuccess) then return Error(me..":EnableReconLocationWithMapMarker :: no Flight has been assigned") end
+    if not self.AssignedFlight then return Error(me..":EnableReconLocationWithMapMarker :: no Flight has been assigned") end
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return Error(me..":EnableReconLocationWithMapMarker :: cannot resolve location: "..DumpPretty(location)) end
+    location = validLocation
+
+    local function isNear(coord)
+        local coordLocation = location:GetCoordinate()
+        if not coordLocation then return Error(me..":EnableReconLocationWithMapMarker :: cannot get coordinate for location") end
+        local distance = coord:Get2DDistance(coordLocation)
+        Debug(me..":EnableReconLocationWithMapMarker :: distance: " .. UTILS.MetersToNM(distance).." nm".." :: distanceTolerance: "..UTILS.MetersToNM(distanceTolerance).." nm")
+        return distance < distanceTolerance
+    end
+
+    return DCAF.PlayerReconTask:New(self.AssignedFlight.Group, location.Name):HandleMapMarker(function(task, event)
+        if isNear(event.MarkCoordinate) then
+            local ok, err = pcall(function() funcSuccess(task, event) end)
+            if not ok then Error("DCAF.Story:EnableReconLocationWithMapMarker :: "..DumpPretty(err)) end
+        end
+    end)
+end
+end
+
+
+do -- |||||||||||||||||||||||||||    Track which Functions has been Called so far    |||||||||||||||||||||||||||
+
+--- Returns the in-game time a function was called, or nil if function hasn't been run
+---@param name any (optional) [default = name of calling function] Name of function
+---@return any timeFunctionWasInvoked Returns nil if function has not been invoked
+function DCAF.Story:IsFunctionDone(name)
+    local add
+    if not isAssignedString(name) then
+        add = true
+        local info = debug.getinfo(2, "n")
+        if not info.name then
+Debug("nisse - DCAF.Story:IsFunctionDone :: WTF?!")
+            return nil
+        end
+        name = info.name
+    end
+    self._functionFlow = self._functionFlow or {}
+    self._functionFlowNextOrder = self._functionFlowNextOrder or 0
+    local info = self._functionFlow[name]
+    if info or not add then return info end
+    Debug(self.Name..":"..name)
+    self._functionFlowNextOrder = self._functionFlowNextOrder + 1
+    info = {
+        FunctionName = name,
+        Time = UTILS.SecondsOfToday(),
+        Order = self._functionFlowNextOrder
+    }
+    local previousFunctionInfo = self:GetFunctionDone(info.Order-1)
+    if previousFunctionInfo then
+        info.PreviousFunction = previousFunctionInfo.FunctionName
+    end
+    self._functionFlow[name] = info
+end
+
+function DCAF.Story:GetFunctionDone(order)
+    if not isNumber(order) then return Error("DCAF.Story:GetFunctionDone :: `order` must be number, but was: "..DumpPretty(order)) end
+    if not self._functionFlow then return end
+    for index, info in ipairs(self._functionFlow) do
+        if info.Order == order then return info end
+    end
+end
+
+function DCAF.Story:DebugFunctionsDoneText()
+-- Debug("nisse - DCAF.Story:DebugFunctionsDoneText :: "..DumpPrettyDeep(self._functionFlow))
+    local flowSorted = dictToList(self._functionFlow, function(a,b) return a.Order < b.Order end)
+    if not flowSorted then return end
+    local info = flowSorted[1]
+    local text = "[1] "..info.FunctionName.." :: "..UTILS.SecondsToClock(info.Time)
+    for i = 2, #flowSorted do
+        info = flowSorted[i]
+        text = text.."\n["..i.."] "..info.FunctionName.." :: "..UTILS.SecondsToClock(info.Time)
+    end
+    return text
+end
+
+function DCAF.Story:DebugMessageFunctionsDone(duration)
+    self:DebugMessage(self:DebugFunctionsDoneText(), duration)
+end
+end -- (Track which Functions has been Called so far)
+
+function DCAF.Story:_getGameMasterMenu()
+    DCAF.Story._gmMenu = DCAF.Story._gmMenu or DCAF.Menu:New("[GM Only]")
+    return DCAF.Story._gmMenu
+end
+
+function DCAF.Story:AddMenu(name)
+    Debug("DCAF.Story:AddMenu :: name: " .. DumpPretty(name))
+    name = name or self.Name
+    self._menu = self:_getGameMasterMenu():New(name)
+    return self._menu
+end
+
+function DCAF.Story:GetMenu()
+    self._menu = self._menu or self:AddMenu()
+    return self._menu
+end
+
+function DCAF.Story:AddCommand(text, func)
+    Debug("DCAF.Story:AddCommand :: text: " .. DumpPretty(text))
+    self:GetMenu():NewCommand(text, func)
+end
+
+function DCAF.Story:AddStartMenu(text)
+    return self:GetMenu():NewCommand(text or "Start", function(menu)
+        self:Start()
+        menu:Remove(false)
+    end)
+end
+
+function DCAF.Story:AddDebugCommand(text, func)
+    Debug(self.Name..":AddDebugCommand :: text: "..Dump(text).." :: func: "..Dump(func))
+    if not self:IsDebug() then return end
+    if not isAssignedString(text) then return Error("DCAF.Story:AddDebugCommand :: `text` must be assigned string, but was: "..DumpPretty(text)) end
+    if not isFunction(func) then return Error("DCAF.Story:AddDebugCommand :: `func` must be function, but was: "..DumpPretty(func)) end
+    local storyMenu = self:GetMenu()
+    if not self._menu.debugMenu then
+        self._menu.debugMenu = storyMenu:New("DEBUG")
+    end
+    return self._menu.debugMenu:NewCommand(text, func)
+end
+
+function DCAF.Story:InitFlightMenuSound(file)
+    if not isAssignedString(file) then return Error(self.Name..":InitFlightMenuSound :: `file` must be assigned string, but was") end
+    self._flightMenuSoundFile = file
+end
+
+function DCAF.Story:AddFlightMenu(text, soundFile)
+    Debug(self.Name..":AddFlightMenu :: text: "..Dump(text))
+    if not self.AssignedFlight then return Error(self.Name..":AddFlightMenu :: no flight was assigned") end
+    if not isAssignedString(text) then return Error(self.Name..":AddFlightMenu :: `text` must be assigned string, but was") end
+    if not isAssignedString(soundFile) then soundFile = self._flightMenuSoundFile end
+    if isAssignedString(soundFile) then MessageTo(self.AssignedFlight.Group, soundFile) end
+    return DCAF.Menu:New(text, self.AssignedFlight.Group)
+end
+
+function DCAF.Story:AddFlightCommand(text, func, soundFile)
+    Debug(self.Name..":AddFlightCommand :: text: "..Dump(text))
+    if not self.AssignedFlight then return Error(self.Name..":AddFlightCommand :: no flight was assigned") end
+    if not isAssignedString(soundFile) then soundFile = self._flightMenuSoundFile end
+    if isAssignedString(soundFile) then MessageTo(self.AssignedFlight.Group, soundFile) end
+    return DCAF.Menu:NewCommand(text, func, self.AssignedFlight.Group)
+end
+
+do -- ||||||||||||||||||||||    Using a Synthetic Controller    ||||||||||||||||||||||
+function DCAF.Story:InitSyntheticController(ttsChannel)
+    Debug("DCAF.Story:InitSyntheticController :: "..self.Name.." :: ttsChannel: " .. Dump(ttsChannel))
+    if ttsChannel == false then
+        self.TTS_Controller = nil
+    else
+        self.TTS_Controller = ttsChannel
+    end
+    if self.TTS_Controller then
+        self:EnableAssignFlight(function(flight)
+            self.TTS_Controller:InitFlightVariable(flight.CallSignPhonetic)
+            self:AssignFlight(flight)
+        end)
+    else
+        self:DisableAssignFlight()
+    end
+    return self
+end
+
+function DCAF.Story:IsSyntheticController()
+    return self.TTS_Controller
+end
+
+function DCAF.Story:SendSyntheticController(message, delay)
+    if not self:IsSyntheticController() then return Error("DCAF.Story:SendSyntheticController :: synthetic controller is not enabled") end
+    if isNumber(delay) and delay > 0 then 
+        return self:SendDelayed(delay, self.TTS_Controller, message)
+    else
+        return self:Send(self.TTS_Controller, message)
+    end
+end
+
+function DCAF.Story:EnableSyntheticController(ttsChannel, preSelect, allowReSelect, textHumanController, textSyntheticController)
+    Debug("DCAF.Story:EnableSyntheticController :: "..self.Name.." :: ttsChannel: " .. Dump(ttsChannel).." :: preSelect: "..DumpPretty(preSelect).." :: allowReSelect: "..DumpPretty(allowReSelect))
+    if not isClass(ttsChannel, DCAF.TTSChannel) then return Error("DCAF.Story:EnableSyntheticController :: `ttsChannel` must be #"..DCAF.TTSChannel.ClassName..", but was: "..DumpPretty(ttsChannel)) end
+    if not isBoolean(allowReSelect) then allowReSelect = true end
+    if not isAssignedString(textHumanController) then textHumanController = "Use Human Controller" end
+    if not isAssignedString(textSyntheticController) then textSyntheticController = "Use Synthetic Controller" end
+    local text
+    if preSelect == true and not self._isSyntheticControllerInitialized then
+        self:InitSyntheticController(ttsChannel)
+        self._isSyntheticControllerInitialized = true
+    end
+    if self.TTS_Controller then text = textHumanController else text = textSyntheticController end
+    local story = self
+    self:AddCommand(text, function(menu)
+        if story.TTS_Controller then
+            story:InitSyntheticController(false)
+        else
+            story:InitSyntheticController(ttsChannel)
+        end
+        menu:Remove(false)
+        if allowReSelect then
+            story:EnableSyntheticController(ttsChannel)
+        end
+    end)
+end
+end -- (Using a Synthetic Controller)
+
+do -- ||||||||||||||||||||||    Assigning Flight from GM Menu    ||||||||||||||||||||||
+DCAF.Story.CallSign =
+{
+    Squadrons = {
+        ["75th"] = {
+            Names = {
+                [1] = "Blackbird",
+                [2] = "Condor",
+                [3] = "Magpie",
+            },
+            Numbers = { 1, 2, 3, 4, 5 }
+        },
+        ["119th"] = {
+            Names = {
+                [1] = "Devil",
+                [2] = "Hell",
+                [3] = "Satan",
+            },
+            Numbers = { 1, 2, 3, 4, 5 }
+        },
+        ["335th"] = {
+            Names = {
+                [1] = "Chief",
+                [2] = "Dallas",
+                [3] = "Eagle",
+            },
+            Numbers = { 1, 2, 3, 4, 5 }
+        },
+    }
+}
+
+DCAF.Story.Nicknames = {
+    _typeNicknames = {
+        ["F-15ESE"] = "Mudhen",
+        ["F-16C_50"] = "Viper",
+        ["FA-18C_hornet"] = "Hornet"
+    }
+}
+
+function DCAF.Flight:New(group, callSign, callSignPhonetic)
+    local flight = DCAF.clone(DCAF.Flight)
+    flight.CallSign = callSign
+    flight.CallSignPhonetic = callSignPhonetic
+    flight.Group = group
+    return flight
+end
+
+function DCAF.Story.Nicknames:GetTypeNickname(group)
+    local typeName = group:GetTypeName()
+Debug("nisse - DCAF.Story.Nicknames :: typeName: " .. typeName)
+    return self._typeNicknames[typeName] or typeName
+end
+
+function DCAF.Story.CallSign:SelectFromGM_Menu(gm_mainMenu, funcDone, text)
+    Debug("DCAF.Story.CallSign:SelectFromMenu")
+    if not isAssignedString(text) then text = "Select Flight" end
+    local menu = gm_mainMenu:New(text)
+    for squadronName, squadronInfo in pairs(DCAF.Story.CallSign.Squadrons) do
+        local squadronMenu = menu:AddMenu(squadronName)
+        for _, name in ipairs(squadronInfo.Names) do
+            local nameMenu = squadronMenu:New(name)
+            for _, number in ipairs(squadronInfo.Numbers) do
+                nameMenu:NewCommand(number, function()
+                    local phoneticNumber = PhoneticAlphabet:ConvertNumber(number)
+                    local callSign = name .. " " .. phoneticNumber
+                    local ok, err = pcall(function() funcDone(callSign) end)
+                    if not ok then Error("DCAF.Story.CallSign:SelectFromGM_Menu_AddCommand :: error when invoking menu function: "..DumpPretty(err)) end
+                end)
+            end
+        end
+    end
+    return menu
+end
+
+--- Builds GM menus to select a flight call-sign from a standardized structure
+---@param funcOnSelected any
+function DCAF.Story:EnableSelectCallsign(funcOnSelected)
+    if not isFunction(funcOnSelected) then return Error("DCAF.Story:EnableSelectCallsign :: `funcOnSelected` must be function, but was: " .. DumpPretty(funcOnSelected)) end
+    local selectCallSign
+    local function _selectCallSign(callSign)
+        self._menuSelectCallSign:Remove(false)
+        Debug(self.Name .. ":EnableSelectCallsign_selectCallSign :: callSign: " .. Dump(callSign))
+        DCAF.delay(function()
+            Debug(self.Name .. ":EnableSelectCallsign_selectCallSign :: re-creating call sign selection")
+            self._menuSelectCallSign = DCAF.Story.CallSign:SelectFromGM_Menu(self._menu, selectCallSign, "Flight: " .. callSign)
+        end, .1)
+        pcall(function() funcOnSelected(callSign) end)
+    end
+    selectCallSign = _selectCallSign
+    self._menuSelectCallSign = DCAF.Story.CallSign:SelectFromGM_Menu(self._menu, selectCallSign)
+end
+
+function DCAF.Story:EnableSelectCallsign(removeParentMenu)
+    if not isBoolean(removeParentMenu) then removeParentMenu = false end
+    if self._menuSelectCallSign then
+        self._menuSelectCallSign:Remove(removeParentMenu)
+        self._menuSelectCallSign = nil
+    end
+end
+
+local function getCallSign(group)
+    local groupName = group.GroupName
+    local split = stringSplit(groupName, '-')
+
+    local function parseNumber()
+        local text = split[2]
+        local number = tonumber(text)
+        if number then return number end
+        local testText = string.sub(text, 1, 1)
+        number = tonumber(testText)
+        if not number then return end
+
+        for i = 2, #text do
+            testText = text.sub(1, i)
+            local testNumber = tonumber(testText)
+            if not testNumber then break end
+            number = testNumber
+        end
+        return number
+    end
+
+    if #split == 1 then split = stringSplit(groupName, ' ') end
+    if #split == 1 then return groupName end
+    local number = parseNumber()
+    if not number then return Error("getCallSign :: unexpected group name format: " .. groupName, groupName) end
+    local phoneticNumber = PhoneticAlphabet:ConvertNumber(number)
+    local callSign = split[1] .. "-" .. number
+    local callSignPhonetic = split[1] .. " " .. phoneticNumber
+    return callSign, callSignPhonetic, groupName
+end
+
+local function getClientFlights(filterCoalition)
+    if filterCoalition ~= nil then
+        local validCoalition = Coalition.Resolve(filterCoalition, true)
+        if not validCoalition then return Error("getClientFlights :: cannot resolve coalition: " .. DumpPretty(filterCoalition)) end
+        filterCoalition = validCoalition
+    else
+        filterCoalition = coalition.side.BLUE
+    end
+    local setClients = SET_CLIENT:New():FilterOnce() -- FilterCoalitions(filterCoalition):FilterOnce()
+    local typesIndex = {
+        -- key   = group type
+        -- value = dictionary { key = call-sign, value = GROUP }
+    }
+    local groupsIndex = {
+        -- key   = group name
+        -- value = GROUP
+    }
+    setClients:ForEachClient(function(client)
+        if client:CountPlayers() == 0 then return end
+        local groupName = client:GetClientGroupName()
+        if groupsIndex[groupName] then return end
+        local group = getGroup(groupName)
+        if not group then return Error("getClientFlights :: cannot get group from name '" .. groupName .. " :: ODD") end
+        groupsIndex[groupName] = group
+        local typeName = DCAF.Story.Nicknames:GetTypeNickname(group)
+        local typesDict = typesIndex[typeName]
+        local callSign, callSignPhonetic = getCallSign(group)
+        if not callSignPhonetic then return Error("getClientFlights :: cannot get call-sign from group '" .. groupName) end
+        if not typesDict then
+            typesDict = {}
+            typesIndex[typeName] = typesDict
+        end
+        typesDict[groupName] = DCAF.Flight:New(group, callSign, callSignPhonetic)
+    end)
+    return typesIndex
+end
+
+local function assignFlightFromGM_Menu(story, funcDone, text, filterCoalition)
+    local gm_menu = story:GetMenu()
+    local clientFlights = getClientFlights(filterCoalition)
+    local menu
+    for type, callSigns in pairs(clientFlights) do
+        menu = menu or gm_menu:New(text)
+        local typeMenu = menu:New(type)
+        for groupName, flight in pairs(callSigns) do
+            typeMenu:NewCommand(groupName, function()
+                funcDone(flight)
+                -- local ok, err = pcall(function() funcDone(flight) end)
+                -- if not ok then Error("DCAF.Story/assignFlightFromGM_Menu :: error when invoking menu function: "..DumpPretty(err)) end
+            end)
+        end
+    end
+    return menu
+end
+
+function DCAF.Story:EnableAssignFlight(funcOnAssigned, text)
+    Debug("DCAF.Story:EnableAssignFlight :: "..self.Name.." :: funcOnSelected: "..DumpPretty(funcOnAssigned).." :: text: "..DumpPretty(text))
+    local assignFlight
+    if self._menuAssignFlightPlaceHolder then self._menuAssignFlightPlaceHolder:Remove(false) end
+
+    local function _assignFlight(flight)
+        self._menuAssignFlight:Remove(false)
+        Debug(self.Name .. ":EnableAssignFlight :: callSign: " .. Dump(flight.CallSign))
+        DCAF.delay(function()
+            Debug(self.Name .. ":EnableAssignFlight_selectCallSign :: re-creating call sign selection")
+            self._menuAssignFlight = assignFlightFromGM_Menu(self, assignFlight, "Flight: "..flight.CallSign)
+        end, .1)
+        self:AssignFlight(flight)
+    end
+
+    assignFlight = _assignFlight
+    if not isAssignedString(text) then text = "Select Flight" end
+    self._menuAssignFlight = assignFlightFromGM_Menu(self, assignFlight, text)
+    if not self._menuAssignFlight then
+        local storyMenu = self:GetMenu()
+        self._menuAssignFlightPlaceHolder = storyMenu:NewCommand("(no flights available)", function() --[[ ignore ]] end)
+    end
+    if not self._playerEntersUnitEventSink then
+        local story = self
+        self._playerEntersUnitEventSink = BASE:New()
+        self._playerEntersUnitEventSink:HandleEvent(EVENTS.PlayerEnterAircraft, function(_, _)
+            if self._menuAssignFlight then self._menuAssignFlight:Remove(false) end
+            story:EnableAssignFlight(funcOnAssigned, text)
+        end)
+    end
+end
+
+function DCAF.Story:DisableAssignFlight(removeParentMenu)
+    if not isBoolean(removeParentMenu) then removeParentMenu = false end
+    if self._menuAssignFlight then
+        self._menuAssignFlight:Remove(removeParentMenu)
+        self._menuAssignFlight = nil
+    end
+end
+end -- (Assigning Flight from GM Menu)
+
+do -- ||||||||||||||||||||||    GBAD - SAM Ambush     ||||||||||||||||||||||
+function DCAF.Story:SetupSamAmbushForTarget(sam, target, options)
+    if not DCAF.GBAD then return Error("DCAF.Story:SetupSamAmbushForTarget :: DCAF.GBAD is not loaded") end
+    Debug(self.Name..":SetupSamAmbushForTarget")
+    local samBush = DCAF.GBAD.Ambush:NewForTarget(sam, target, options)
+    return samBush
+end
+end -- (GBAD - SAM Ambush)
 
 Trace("\\\\\\\\\\ DCAF.Story.lua was loaded //////////")
