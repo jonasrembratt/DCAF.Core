@@ -14,8 +14,14 @@ local DCAF_Recon_Defaults = {
     ReportLifespan = {
         Stationary = Minutes(20),
         Mobile = Minutes(5),
-    }
+    },
+    CountPlayerReconTasks = 0
 }
+
+function DCAF_Recon_Defaults:GetPlayerReconID()
+    self.CountPlayerReconTasks = self.CountPlayerReconTasks+1
+    return self.CountPlayerReconTasks
+end
 
 DCAF.Recon = {
     ClassName = "DCAF.Recon",
@@ -68,9 +74,99 @@ function DCAF.ReconDrawOptions:InitTextFillColor(color)
     return self
 end
 
+DCAF.PlayerReconTask = {
+    ClassName = "DCAF.ReconTask",
+    ----
+    ID = 0,    -- see DCAF_Recon_Defaults.CountReconTasks
+}
+
+function DCAF.PlayerReconTask:New(group, name)
+    Debug("DCAF.PlayerReconTask:New :: group: " .. DumpPretty(group).." :: name: "..DumpPretty(name))
+    local validGroup = getGroup(group)
+    if not validGroup then return Error("DCAF.PlayerReconTask:New :: cannot resolve group: " .. DumpPretty(group)) end
+    group = validGroup
+    local task = DCAF.clone(DCAF.PlayerReconTask)
+    task.ID = DCAF_Recon_Defaults:GetPlayerReconID()
+    task.Group = group
+    if isAssignedString(name) then
+        task.Name = name
+    else
+        task.Name = DCAF.PlayerReconTask.ClassName.."#"..task.ID
+    end
+    return task
+end
+
+--- TODO :: move to DCAF.Core
+function DCAF.IsSinglePlayer()
+    local playerUnits = _DATABASE:GetPlayerUnits()
+    local count = 0
+    local singlePlayerName
+    for playerName, playerUnit in pairs( playerUnits ) do
+        singlePlayerName = playerName
+        count = count + 1
+        if count > 1 then return end
+    end
+    return count == 1, singlePlayerName
+end
+
+--- Makes task automatically detect when player in group adds a map marker
+---@return table self #DCAF.PlayerReconTask
+function DCAF.PlayerReconTask:HandleMapMarker(funcOnMark)
+    Debug("DCAF.PlayerReconTask:HandleMapMarker :: funcOnMark: " .. DumpPretty(funcOnMark))
+    if not isFunction(funcOnMark) then return Error("DCAF.PlayerReconTask:HandleMapMarker :: `funcOnMark` must be function, but was: " .. DumpPretty(funcOnMark)) end
+
+    local function isPlayerInGroup(playerName)
+        if not playerName then
+            local isSinglePlayer, singlePlayerName = DCAF.IsSinglePlayer()
+            if DCAF.Debug and isSinglePlayer then return singlePlayerName end
+            return
+        end
+        local playerNames = self.Group:GetPlayerNames()
+        for _, pn in ipairs(playerNames) do
+            if pn == playerName then return true end
+        end
+        return false
+    end
+
+    self._mapMarkerEventSink = BASE:New()
+    self._mapMarkerEventSink:HandleEvent(EVENTS.MarkAdded, function(_, e)
+Debug("nisse - DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: e: " .. DumpPrettyDeep(e, 2))
+        local initiator = e.IniUnit or e.initiator
+        local iniUnit
+        local playerName
+        if not initiator then return Error("DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: no initiator object in event") end
+        if isClass(initiator, UNIT) then
+Debug("nisse - DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: initiator is UNIT")
+            iniUnit = initiator
+            playerName = initiator:GetPlayerName()
+        elseif initiator then
+Debug("nisse - DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: initiator is DCS unit")
+            iniUnit = UNIT:Find(initiator)
+            if iniUnit then
+                playerName = initiator:GetPlayerName()
+            else
+                playerName = initiator:getPlayerName()
+            end
+        end
+        if not playerName then return Error("DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: cannot obtain initiator player name from event") end
+        if not isPlayerInGroup(playerName) then return end
+        e.PlayerName = playerName
+        local ok, err = pcall(function() funcOnMark(self, e) end)
+        if not ok then Error("DCAF.PlayerReconTask:HandleMapMarker :: error in callback: " .. DumpPretty(err)) end
+    end)
+
+    return self
+end
+
+function DCAF.PlayerReconTask:End()
+    if self._mapMarkerEventSink then
+        self._mapMarkerEventSink:UnHandleEvent(EVENTS.MarkAdded)
+    end
+end
+
 --- Creates and returns a new #DCAF.Recon object
 -- @param #Any group - a source for a #GROUP (can be a #GROUP, a #UNIT or the name of a #GROUP/#UNIT)
--- @param #DCAF.TTSChannel tts - (optional) initializes the TTS channel used to trabsmit verbal reports
+-- @param #DCAF.TTSChannel tts - (optional) initializes the TTS channel used to transmit verbal reports
 function DCAF.Recon:New(group, tts)
     local validGroup = getGroup(group)
     if not validGroup then
