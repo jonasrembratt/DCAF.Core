@@ -1537,7 +1537,7 @@ function DCAF.GBAD.Ambush:NewForTarget(sam, target, options)
     local attackRange = options._attackRange
     local samLocation = DCAF.Location.Resolve(sam)
     local targetLocation = DCAF.Location.Resolve(target)
-Debug("nisse - DCAF.GBAD.Ambush:NewForTarget :: targetLocation: "..DumpPretty(targetLocation))
+-- Debug("nisse - DCAF.GBAD.Ambush:NewForTarget :: targetLocation: "..DumpPretty(targetLocation))
 
     local function scoot()
         local scootLocations = options._scootLocations
@@ -1553,7 +1553,7 @@ Debug("nisse - DCAF.GBAD.Ambush:NewForTarget :: targetLocation: "..DumpPretty(ta
     end
 
     local function deactivate()
-        if ambush._debug then MessageTo(nil, "Sambush attack ends :: "..sam.GroupName) end
+        if ambush:IsDebug() then MessageTo(nil, "Sambush attack ends :: "..sam.GroupName) end
         sam:UnHandleEvent(EVENTS.Shot)
         sam:OptionAlarmStateGreen()
         sam:OptionROEHoldFire()
@@ -1561,12 +1561,18 @@ Debug("nisse - DCAF.GBAD.Ambush:NewForTarget :: targetLocation: "..DumpPretty(ta
     end
 
     local function attack()
-        if ambush._debug then MessageTo(nil, "Sambush attack :: "..sam.GroupName) end
-        if ambush._debug then
+        if ambush:IsDebug() then MessageTo(nil, "Sambush attack :: "..sam.GroupName) end
+        if ambush:IsDebug() then
             sam:GetCoordinate():CircleToAll(attackRange)
         end
         sam:OptionAlarmStateRed()
         sam:OptionROEOpenFire()
+        local ok, err = pcall(function()
+Debug("nisse - DCAF.GBAD.Ambush :: OnActivates is called...")
+            ambush:OnActivated(sam)
+        end)
+        if not ok then Error("DCAF.GBAD.Ambush:OnActivated :: "..DumpPrettyDeep(err)) end
+
         local attackOnlyTarget = options._attackOnlyTarget
         local maxShots = options._maxShots
         local ensureHitRange = options._ensureHitRange
@@ -1581,7 +1587,7 @@ Debug("nisse - DCAF.GBAD.Ambush:NewForTarget :: targetLocation: "..DumpPretty(ta
 
         local function isTargetedUnitInsideEnsuredHitRange(tgtUnit)
             if not ensureHitRange then return end
-            if ambush._debug then MessageTo(nil, "Sambush attack weapon launch :: emulating hit via other target: "..tgtUnit.UnitName) end
+            if ambush:IsDebug() then MessageTo(nil, "Sambush attack weapon launch :: emulating hit via other target: "..tgtUnit.UnitName) end
             local coordTgtUnit = tgtUnit:GetCoordinate()
             if coordTgtUnit then
                 local distanceFromIntendedTarget = targetLocation:Get3DDistance(coordTgtUnit)
@@ -1595,21 +1601,21 @@ Debug("nisse - DCAF.GBAD.Ambush:NewForTarget :: targetLocation: "..DumpPretty(ta
             local weapon = e.weapon
             countShots = countShots + 1
             if ambush._isTargetHit then deactivate()
-                if ambush._debug then MessageTo(nil, "Sambush attack weapon launch :: target was hit - deactivates") end
+                if ambush:IsDebug() then MessageTo(nil, "Sambush attack weapon launch :: target was hit - deactivates") end
                 if weapon then weapon:destroy() end
                 return deactivate()
             end
             if countShots > maxShots then deactivate()
-                if ambush._debug then MessageTo(nil, "Sambush attack weapon launch :: max shots taken - deactivates") end
+                if ambush:IsDebug() then MessageTo(nil, "Sambush attack weapon launch :: max shots taken - deactivates") end
                 if weapon then weapon:destroy() end
                 return deactivate()
             end
-            if ambush._debug then MessageTo(nil, "Sambush attack weapon launch :: count: "..countShots.."/"..maxShots) end
+            if ambush:IsDebug() then MessageTo(nil, "Sambush attack weapon launch :: count: "..countShots.."/"..maxShots) end
             if attackOnlyTarget and (not isTarget(e.TgtUnit) or ambush._isTargetHit) then
                 -- we can perhaps use this shot anyway to 'ensure' a hit on intended target (who's gonna know, right?)
                 if not isTargetedUnitInsideEnsuredHitRange(e.TgtUnit) then
                     -- weapon target is too far away from intended target
-                    if ambush._debug then MessageTo(nil, "Sambush attack weapon launch :: unintended target - weapon disabled") end
+                    if ambush:IsDebug() then MessageTo(nil, "Sambush attack weapon launch :: unintended target - weapon disabled") end
                     if weapon then weapon:destroy() end
                     return
                 end
@@ -1623,14 +1629,14 @@ Debug("nisse - DCAF.GBAD.Ambush:NewForTarget :: targetLocation: "..DumpPretty(ta
                 local function endWeaponTrack(explodeTarget)
                     pcall(function() DCAF.stopScheduler(schedulerID) end)
                     if not explodeTarget then
-                        if ambush._debug then MessageTo(nil, "Sambush attack - weapon track ends") end
+                        if ambush:IsDebug() then MessageTo(nil, "Sambush attack - weapon track ends") end
                         return
                     end
-                    if ambush._debug then MessageTo(nil, "Sambush attack - weapon track ends - explode target") end
+                    if ambush:IsDebug() then MessageTo(nil, "Sambush attack - weapon track ends - explode target") end
                     local targetUnit
                     if isTargetGroup then
                         if coordWeapon then
-                            if ambush._debug then MessageTo(nil, "Sambush - picks closest target for destruction") end
+                            if ambush:IsDebug() then MessageTo(nil, "Sambush - picks closest target for destruction") end
                             targetUnit = getGroupClosestUnit(target, coordWeapon)
                         end
                     else
@@ -1652,30 +1658,31 @@ Debug("nisse - DCAF.GBAD.Ambush:NewForTarget :: targetLocation: "..DumpPretty(ta
                         coordWeapon = COORDINATE:NewFromVec3(vec3)
                         local distance
                         distance = targetLocation:Get3DDistance(coordWeapon)
-                        if ambush._debug then MessageTo(nil, "Sambush attack - weapon track - "..distance.." m") end
+                        if ambush:IsDebug() then MessageTo(nil, "Sambush attack - weapon track - "..Dump(distance).." m") end
                         if fakeIt then
                             -- weapon is going after a different unit, ensure it doesn't get hit
                             local coordTgtUnit = tgtUnit:GetCoordinate()
                             if coordTgtUnit then
-                                local actualDistance = coordTgtUnit:Get3DDistance(coordWeapon)
+                                local actualDistance = coordTgtUnit:Get3DDistance(coordWeapon) or lastDistance
                                 if actualDistance < 400 or actualDistance < ensureHitRange then
-                                    if ambush._debug then MessageTo(nil, "Sambush attack - fake hit!") end
+                                    if ambush:IsDebug() then MessageTo(nil, "Sambush attack - fake hit!") end
                                     weapon:destroy()
                                     distance = actualDistance
                                 end
                             end
                         end
+                        if not distance then return endWeaponTrack(ensureHit) end
                         if distance <= ensureHitRange and not ensureHit then
-                            if ambush._debug then MessageTo(nil, "Sambush attack - hit assured") end
+                            if ambush:IsDebug() then MessageTo(nil, "Sambush attack - hit assured") end
                             ensureHit = true
                         end
                         if lastDistance and distance > lastDistance then
-                            if ambush._debug then MessageTo(nil, "Sambush attack - weapon recedes") end
+                            if ambush:IsDebug() then MessageTo(nil, "Sambush attack - weapon recedes") end
                             return endWeaponTrack(ensureHit)
                         end
                         lastDistance = distance
                     else
-                        if ambush._debug then MessageTo(nil, "Sambush attack - no weapon coordinate") end
+                        if ambush:IsDebug() then MessageTo(nil, "Sambush attack - no weapon coordinate") end
                         endWeaponTrack(ensureHit or isTarget(tgtUnit))
                     end
                 end
@@ -1690,19 +1697,18 @@ Debug("nisse - DCAF.GBAD.Ambush:NewForTarget :: targetLocation: "..DumpPretty(ta
             ambush._isTargetHit = true
             eventSink:UnHandleEvent(EVENTS.Hit)
             deactivate()
-            if ambush._debug then MessageTo(nil, "Sambush attack - target hit - shuts down") end
+            if ambush:IsDebug() then MessageTo(nil, "Sambush attack - target hit - shuts down") end
         end)
 
         if schedulerID then pcall(function() DCAF.stopScheduler(schedulerID) end) end
     end
 
     local function monitorApproach()
-Debug("nisse - monitorApproach")
         local lastDistance = wakeRange
         local attackOnReceding = options._attackOnReceding
         schedulerID = DCAF.startScheduler(function()
             local distance = samLocation:Get2DDistance(targetLocation)
-Debug("nisse - monitorApproach :: distance: "..Dump(distance).." :: distance: "..distance.." :: lastDistance: "..lastDistance)
+Debug("nisse - DCAF.GBAD.Ambush_monitorApproach :: distance: "..Dump(distance).." :: distance: "..distance.." :: lastDistance: "..lastDistance)
             if distance <= attackRange then return attack() end
             if distance > lastDistance and attackOnReceding then return attack() end
             lastDistance = distance
@@ -1717,6 +1723,15 @@ Debug("nisse - monitorApproach :: distance: "..Dump(distance).." :: distance: ".
     end)
     return ambush
 end
+
+--- Triggered when SAM group activates to attack
+---@param samGroup table The SAM group
+function DCAF.GBAD.Ambush:OnActivated(samGroup)
+    Debug(DCAF.GBAD.Ambush.ClassName..":OnActivated :: samGroup: "..DumpPretty(samGroup))
+    -- to be overriddem
+end
+
+function DCAF.GBAD.Ambush:IsDebug() return self._debug end
 
 function DCAF.GBAD.Ambush:Debug(value)
     if not isBoolean(value) then value = true end

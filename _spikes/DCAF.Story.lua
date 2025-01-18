@@ -855,9 +855,9 @@ end
 ---@param locationA any Can be anything resolvable as a #DCAF.Location
 ---@param locationB any Can be anything resolvable as a #DCAF.Location
 ---@param funcInRange function Handler function to be called back once locations are within range of each other
----@param exitRange number (optional) When specified (meters), function will automatically stop monitoring for locations coming within mutual range
----@param interval number (optional) [default = 1] Specifies an interval (seconds) to be used for monitoring locations coming within mutual range
----@param funcExit function (optional) Handler function to be called back once locations are outside of `exitRange`
+---@param exitRange any (optional) When specified (meters), function will automatically stop monitoring for locations coming within mutual range
+---@param interval any (optional) [default = 1] Specifies an interval (seconds) to be used for monitoring locations coming within mutual range
+---@param funcExit any (optional) Handler function to be called back once locations are outside of `exitRange`
 ---@return self any self
 function DCAF.Story:WhenIn2DRange(range, locationA, locationB, funcInRange, exitRange, interval, funcExit)
     if not isNumber(range) or range < 1 then return Error("DCAF.Story:WhenIn2DRange :: `range` must be positive number, but was: " .. DumpPretty(range), self) end
@@ -1361,8 +1361,7 @@ do -- ||||||||||||||||||||||    GBAD - SAM Ambush     ||||||||||||||||||||||
 function DCAF.Story:SetupSamAmbushForTarget(sam, target, options)
     if not DCAF.GBAD then return Error("DCAF.Story:SetupSamAmbushForTarget :: DCAF.GBAD is not loaded") end
     Debug(self.Name..":SetupSamAmbushForTarget")
-    local samBush = DCAF.GBAD.Ambush:NewForTarget(sam, target, options)
-    return samBush
+    return DCAF.GBAD.Ambush:NewForTarget(sam, target, options)
 end
 end -- (GBAD - SAM Ambush)
 

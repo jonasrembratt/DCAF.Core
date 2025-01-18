@@ -4777,7 +4777,9 @@ function GetBearingAndSlantRange(from, to)
         error("GetBearing :: cannot resolve `to`: " .. DumpPretty(dTo)) end
 
     local fromCoord = dFrom:GetCoordinate()
+    if not fromCoord then return end
     local toCoord = dTo:GetCoordinate()
+    if not toCoord then return end
     local distance = fromCoord:Get3DDistance(toCoord)
     return fromCoord:GetBearingTo(toCoord), distance
 end
@@ -5518,12 +5520,13 @@ function GetAltitudeAsAngelsOrCherubs( value )
 end
 
 function GetRelativeDirection(heading, bearing)
-    local rd = bearing - heading -- rd = relative direction
+        local rd = bearing - heading -- rd = relative direction
     if rd < -180 then
-        rd = rd + 360
+        return rd + 360
     elseif rd > 180 then
-        rd = rd - 360
+        return rd - 360
     end
+    return rd
 end
 
 --- Returns an object with three values to describe the relative position between two locations
