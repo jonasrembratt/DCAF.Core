@@ -912,23 +912,23 @@ function DCAF_Menu_DB:Remove(menu, removeEmptyParent)
     end
     self._index[menu.Key] = nil
     local parent = self:GetParent(menu)
+    self:RemoveChildren(menu, true)
     if not parent then return end
     parent.CountChildren = parent.CountChildren - 1
     if not removeEmptyParent or parent.CountChildren > 0 then return end
     parent:Remove(false)
 end
 
-function DCAF_Menu_DB:RemoveChildren(menu)
-    local children = DCAF_Menu_DB:GetChildren(menu)
+function DCAF_Menu_DB:RemoveChildren(menu, recursive)
+    local children = DCAF_Menu_DB:GetChildren(menu, recursive)
     if not children then return self end
 
-Debug("nisse - DCAF_Menu_DB:RemoveChildren :: children: "..DumpPrettyDeep(children, 1).." :: #children: "..Dump(#children))
+-- Debug("nisse - DCAF_Menu_DB:RemoveChildren :: children: "..DumpPrettyDeep(children, 1).." :: #children: "..Dump(#children))
     for _, child in ipairs(children) do
-Debug("nisse - DCAF_Menu_DB:RemoveChildren :: removes child: "..child.Path.."..")
+-- Debug("nisse - DCAF_Menu_DB:RemoveChildren :: removes child: "..child.Path.."..")
         local ok, err = pcall(function() child:Remove(false) end)
         if not ok then return Error("WTF?! "..DumpPrettyDeep(err, 2)) end
     end
-
 end
 
 function DCAF_Menu_DB:Get(id) return self._menus[id] end
@@ -951,12 +951,27 @@ end
 
 --- Returns all child menus for a specified menu
 ---@param menu table The parent menu
-function DCAF_Menu_DB:GetChildren(menu)
+---@param recursive boolean (optional) [default = false] When set, includes all sub child menus recursively
+function DCAF_Menu_DB:GetChildren(menu, recursive)
     local prefix = '^'..escapePattern(menu.Key)
     local children = {}
     local text = menu:GetText()
-    for key, child in pairs(self._index) do
-        if child:GetText() ~= text and string.find(key, prefix) then children[#children+1] = child end
+    local level = #menu.Menu
+
+    local function process(child)
+        local childLevel = #child.Menu
+        if childLevel <= level then return end
+        local key = child.Key
+        local include
+        if recursive then
+            include = childLevel >= level+1 and string.find(key, prefix)
+        else
+            include = childLevel == level+1 and string.find(key, prefix)
+        end
+        if include then children[#children+1] = child end
+    end
+    for _, child in pairs(self._index) do
+        process(child)
     end
     return children
 end
@@ -5540,6 +5555,7 @@ function GetRelativePosition(source, target)
 
     local heading = sourceLocation:GetHeading()
     local bearing, slantRange = GetBearingAndSlantRange(source, target)
+    if not bearing then return end
     local rd = GetRelativeDirection(heading, bearing)
     local sourceCoordinate = sourceLocation:GetCoordinate()
     local targetCoordinate = targetLocation:GetCoordinate()
