@@ -1084,7 +1084,7 @@ function DCAF.Story:InitSyntheticController(ttsChannel)
             self.TTS_Controller:InitFlightVariable(flight.CallSignPhonetic)
             self:AssignFlight(flight)
         end)
-    else
+    elseif not self._isAssignFlightAlwaysEnabled then
         self:DisableAssignFlight()
     end
     return self
@@ -1103,12 +1103,13 @@ function DCAF.Story:SendSyntheticController(message, delay)
     end
 end
 
-function DCAF.Story:EnableSyntheticController(ttsChannel, preSelect, allowReSelect, textHumanController, textSyntheticController)
+function DCAF.Story:EnableSyntheticController(ttsChannel, preSelect, allowReSelect, textHumanController, textSyntheticController, confirmChoice)
     Debug("DCAF.Story:EnableSyntheticController :: "..self.Name.." :: ttsChannel: " .. Dump(ttsChannel).." :: preSelect: "..DumpPretty(preSelect).." :: allowReSelect: "..DumpPretty(allowReSelect))
     if not isClass(ttsChannel, DCAF.TTSChannel) then return Error("DCAF.Story:EnableSyntheticController :: `ttsChannel` must be #"..DCAF.TTSChannel.ClassName..", but was: "..DumpPretty(ttsChannel)) end
     if not isBoolean(allowReSelect) then allowReSelect = true end
     if not isAssignedString(textHumanController) then textHumanController = "Use Human Controller" end
     if not isAssignedString(textSyntheticController) then textSyntheticController = "Use Synthetic Controller" end
+    if not isBoolean(confirmChoice) then confirmChoice = true end
     local text
     if preSelect == true and not self._isSyntheticControllerInitialized then
         self:InitSyntheticController(ttsChannel)
@@ -1116,17 +1117,26 @@ function DCAF.Story:EnableSyntheticController(ttsChannel, preSelect, allowReSele
     end
     if self.TTS_Controller then text = textHumanController else text = textSyntheticController end
     local story = self
-    self:AddCommand(text, function(menu)
+    if self._menuSyntheticOrHumanController then self._menuSyntheticOrHumanController:Remove(false) end
+    local menu = self:GetMenu()
+
+    local function func()
         if story.TTS_Controller then
             story:InitSyntheticController(false)
         else
             story:InitSyntheticController(ttsChannel)
         end
-        menu:Remove(false)
         if allowReSelect then
             story:EnableSyntheticController(ttsChannel)
         end
-    end)
+    end
+
+    if confirmChoice then
+        self._menuSyntheticOrHumanController = menu:New(text)
+        self._menuSyntheticOrHumanController:NewCommand("Confirm: "..text, func)
+    else
+        self._menuSyntheticOrHumanController = menu:NewCommand(text, func)
+    end
 end
 end -- (Using a Synthetic Controller)
 
@@ -1316,7 +1326,11 @@ local function assignFlightFromGM_Menu(story, funcDone, text, filterCoalition)
     return menu
 end
 
-function DCAF.Story:EnableAssignFlight(funcOnAssigned, text)
+--- Enables assigning a flight to the story. For some stories this is essential (when so, the story should not start before a flight was assigned)
+---@param funcOnAssigned any (optional) A function to be invoked when flight was assigned
+---@param text any (optional) [default = "Assign Flight"]
+---@param always any (optional) [default = true] When false, the ability to assign a flight is coupled with the use of a synthetic controller (flight can only be assigned when a synthetic controller is in use)
+function DCAF.Story:EnableAssignFlight(funcOnAssigned, text, always)
     Debug("DCAF.Story:EnableAssignFlight :: "..self.Name.." :: funcOnSelected: "..DumpPretty(funcOnAssigned).." :: text: "..DumpPretty(text))
     local assignFlight
     if self._menuAssignFlightPlaceHolder then self._menuAssignFlightPlaceHolder:Remove(false) end
@@ -1332,7 +1346,9 @@ function DCAF.Story:EnableAssignFlight(funcOnAssigned, text)
     end
 
     assignFlight = _assignFlight
-    if not isAssignedString(text) then text = "Select Flight" end
+    if not isAssignedString(text) then text = "Assign Flight" end
+    if not isBoolean(always) then always = true end
+    self._isAssignFlightAlwaysEnabled = always
     self._menuAssignFlight = assignFlightFromGM_Menu(self, assignFlight, text)
     if not self._menuAssignFlight then
         local storyMenu = self:GetMenu()
