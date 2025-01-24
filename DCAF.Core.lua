@@ -76,6 +76,15 @@ DCAF.Units = {
     Metric = "Metric"      -- meters / klicks
 }
 
+function DCAF.StackTrace(message)
+    if message then
+        return message .. " :: " .. debug.traceback()
+    else
+        return debug.traceback()
+    end
+    -- return BASE.Debug.traceback()
+end
+
 local _debugId = 0
 local function get_next_debugId()
     _debugId = _debugId + 1
@@ -246,7 +255,7 @@ function isClass( value, class )
     end
     if value.ClassName == class then return true end
     local metatable = getmetatable(value)
-    if metatable then return isClass(metatable, class) end
+    if metatable then return isClass(metatable.__index, class) or isClass(metatable, class) end
 end
 function isUnit( value ) return isClass(value, UNIT) end
 function isGroup( value ) return isClass(value, GROUP) end
@@ -277,6 +286,15 @@ function trimSpawnIndex(s)
 
     local trimmed = string.sub(s, 1, start-1)
     return trimmed
+end
+
+--- Removes all surplus whitespace from a string
+---@param input string The string to trim surplus whitespace from
+---@return string The trimmed string
+function trimSurplusWhitespace(input)
+    local result = input:match("^%s*(.-)%s*$")
+    result = result:gsub("%s+", " ")
+    return result
 end
 
 function escapePattern(text)
@@ -727,6 +745,14 @@ function getGroup( source, data, dataKey )
     end
 end
 
+function getUnitOrGroupOrStatic(source)
+    local unit = getUnit(source)
+    if unit then return unit end
+    local group = getGroup(source)
+    if group then return group end
+    return getStatic(source)
+end
+
 function getControllable( source )
     local unit = getUnit(source)
     if (unit ~= nil) then
@@ -740,15 +766,10 @@ function getControllable( source )
 end
 
 function getStatic( source )
-    if isStatic(source) then
-        return source end
-    if not isAssignedString(source) then
-        return end
-
+    if isStatic(source) then return source end
+    if not isAssignedString(source) then return Error("getStatic :: cannot resolve `source`: "..DumpPretty(source)) end
     local static
-    pcall(function()
-        static = STATIC:FindByName(source)
-    end)
+    pcall(function() static = STATIC:FindByName(source) end)
     return static
 end
 
@@ -793,6 +814,8 @@ end
 ---@param group any Can be #GROUP, #UNIT, or name of group/unit. Must be resolvable to a #GROUP
 ---@param location any Can be anything that can be resolved into a #DCAF.Location
 function getGroupClosestUnit(group, location)
+Debug("nisse - getGroupClosestUnit :: group: "..group.GroupName)
+
     local validGroup = getGroup(group)
     if not validGroup then return Error("getGroupClosestUnit :: could not resolve `group`: " .. DumpPretty(group)) end
     local validLocation = DCAF.Location.Resolve(location)
@@ -800,19 +823,48 @@ function getGroupClosestUnit(group, location)
     group = validGroup
     local coordLocation = validLocation:GetCoordinate()
     local units = group:GetUnits()
+Debug("nisse - getGroupClosestUnit :: units: "..DumpPretty(units))
     local closestUnit
     local closestDistance = NauticalMiles(9999)
+
     local function measure(unit)
+Debug("nisse - getGroupClosestUnit :: unit: "..DumpPretty(unit))
         local coordUnit = unit:GetCoordinate()
-        if not coordUnit then return end
+        if not coordUnit then
+Debug("nisse - getGroupClosestUnit :: no coord for unit: "..unit.UnitName)
+            return
+        end
         local distance = coordUnit:Get2DDistance(coordLocation)
+Debug("nisse - getGroupClosestUnit :: distance: "..distance)
         if distance > closestDistance then return end
         closestDistance = distance
         closestUnit = unit
     end
+
     for _, unit in ipairs(units) do measure(unit) end
     return closestUnit, closestDistance
 end
+
+-- function getGroupClosestUnit(group, location)
+--     local loc = DCAF.Location.Resolve(location)
+--     if not loc then
+--         error("GROUP:GetClosestUnit :: cannot resolve #DCAF.Location from: " .. DumpPretty(location)) end
+
+--     local coord = loc:GetCoordinate()
+--     local minDistance = 65535
+--     local closestUnit
+--     for _, unit in ipairs(group:GetUnits()) do
+--         local coordUnit = unit:GetCoordinate()
+--         if coordUnit then
+--             local distance = coord:Get2DDistance(coordUnit)
+--             if distance < minDistance then
+--                 minDistance = distance
+--                 closestUnit = unit
+--             end
+--         end
+--     end
+--     return closestUnit
+-- end
 
 function getZone( source )
     if isZone(source) then
@@ -903,11 +955,14 @@ end
 function DCAF_Menu_DB:Remove(menu, removeEmptyParent)
     Debug(DCAF.Menu.ClassName..":Remove :: "..menu.Path.." :: removeEmptyParent: "..Dump(removeEmptyParent).." :: menu.Menu: "..DumpPretty(menu.Menu))
     if menu.Group then
+        Debug(DCAF.Menu.ClassName..":Remove :: Removes group menu: "..menu.Key)
         local groupId = menu.Group:GetID()
         missionCommands.removeItemForGroup(groupId, menu.Menu)
     elseif menu.Coalition then
+        Debug(DCAF.Menu.ClassName..":Remove :: Removes coalition menu: "..menu.Key)
         missionCommands.removeItemForCoalition(menu.Coalition, menu.Menu)
     else
+        Debug(DCAF.Menu.ClassName..":Remove :: Removes mission menu: "..menu.Key)
         missionCommands.removeItem(menu.Menu)
     end
     self._index[menu.Key] = nil
@@ -1218,7 +1273,7 @@ end
 
 --- Returns a frequency (#DCAF.Frequency)
 ---@param name string Name of requested frequency
----@param systemName string (optional) [defaul = current frequency system name] Specifies an alternative frequency system
+---@param systemName any (optional) [defaul = current frequency system name] Specifies an alternative frequency system
 ---@return any frequency A #DCAF.Frequency if it is supported by frequency system; otherwise nil
 function DCAF.Frequencies:Get(name, systemName)
     if not isAssignedString(name) then return Error("DCAF.Frequencies:Get :: `name` must be assigned string, but was: " .. DumpPretty(name)) end
@@ -1256,7 +1311,7 @@ end
 function DCAF.Frequency:New(freq, mod, name, notes)
     local f = DCAF.clone(DCAF.Frequency)
     if not isNumber(freq) then return Error("DCAF.Frequency:New :: ") end
-Debug("nisse - DCAF.Frequency:New :: AM: " .. Dump(AM) .. " :: mod: " .. Dump(mod))
+-- Debug("nisse - DCAF.Frequency:New :: AM: " .. Dump(AM) .. " :: mod: " .. Dump(mod).." :: "..DCAF.StackTrace())
     if isAssignedString(mod) and mod ~= AM and mod ~= FM then return Error("DCAF.Frequency:New :: invalid modulation: " .. mod) end
     if name ~= nil and not isAssignedString(name) then return Error("DCAF.Frequency:NewNamed :: `name` must be assigned string, but was: " .. DumpPretty(name)) end
     if notes ~= nil and not isAssignedString(notes) then return Error("DCAF.Frequency:New :: notes must be string, but was: " .. DumpPretty(notes)) end
@@ -1687,6 +1742,12 @@ function listReverse(list)
     return reversed
 end
 
+function stringCamelToDisplay(input)
+    local result = input:sub(1, 1):upper() .. input:sub(2)
+    result = result:gsub("(%u)", " %1")
+    return result:gsub("^%s+", "")
+end
+
 function stringStartsWith(s, prefix)
     if not isAssignedString(s) or not isAssignedString(prefix) then
         return end
@@ -2072,7 +2133,6 @@ end
 
 function PhoneticAlphabet:ConvertNumber(number, precision)
     local s
-Debug("nisse - PhoneticAlphabet:ConvertNumber :: number: " .. Dump(number) .. " :: precision: " .. Dump(precision))
     if number > 1000 then
         local thousands = math.floor(number / 1000)
 Debug("nisse - PhoneticAlphabet:ConvertNumber :: thousands: " .. Dump(thousands))
@@ -2227,15 +2287,6 @@ function UTILS.SecondsToClock(seconds, short, trimSeconds)
         -- end
 
     end
-end
-
-function DCAF.StackTrace(message)
-    if message then
-        return message .. " :: " .. debug.traceback()
-    else
-        return debug.traceback()
-    end
-    -- return BASE.Debug.traceback()
 end
 
 --- Schedule repeated invocation of a function
@@ -2672,40 +2723,38 @@ function tableFilter( table, func )
     return result, count
 end
 
+--- Return random item from a list that meets a specified criteria
+---@param list table The list to get a random item from 
+---@param criteriaFunc function A function that gets invoked for all items. Function needs to return true if the item is to be picked and returned
+---@return unknown|nil item The randomly selected item, if criteria returns true; otherwise nil
+---@return integer index The index of the randomly selected item if criteria returns true; otherwise zero (0)
 function listRandomItemWhere(list, criteriaFunc)
-    if not isTable(list) then
-        error("listRandomItem :: `list` must be table but was " .. type(list)) end
-
-    if isFunction(criteriaFunc) then
-        list = tableRemoveWhere(listCopy(list, {}), function(i)  return not criteriaFunc(i)  end)
-    end
-    if #list == 0 then
-        return end
-
+    if not isTable(list) then return Error("listRandomItem :: `list` must be table but was " .. type(list)), 0 end
+    if isFunction(criteriaFunc) then list = tableRemoveWhere(listCopy(list, {}), function(i)  return not criteriaFunc(i)  end) end
+    if #list == 0 then return nil, 0 end
     local index = math.random(#list)
     local item = list[index]
     return item, index
 end
 
+--- Returns a random item from a list, along with its index
+---@param list table The list to get a random item from 
+---@param ignoreFunctions any (optional) [default = true] When set, items of type 'function' will not be selected/returned
+---@param nisse any
+---@return unknown|nil item The randomly selected item, if criteria returns true; otherwise nil
+---@return integer index The index of the randomly selected item if criteria returns true; otherwise zero (0)
 function listRandomItem(list, ignoreFunctions, nisse)
--- if nisse then
---     Debug("nisse - listRandomItem :: list: " .. DumpPretty(list))
--- end
-    if not isList(list) then
-        error("listRandomItem :: `list` must be list but was " .. type(list)) end
-
-    if not isBoolean(ignoreFunctions) then
-        ignoreFunctions = true
-    end
+if nisse then
+    Debug("nisse - listRandomItem :: list: " .. DumpPretty(list))
+end
+    if not isList(list) then return Error("listRandomItem :: `list` must be list but was " .. type(list)), 0 end
+    if not isBoolean(ignoreFunctions) then ignoreFunctions = true end
     if ignoreFunctions then
-        return listRandomItemWhere(list, function(i)  return not isFunction(i)  end)
+        local item, index = listRandomItemWhere(list, function(i) return not isFunction(i) end)
+        return item, index
     end
-    if #list == 0 then
-        return end
-
-    if #list == 1 then
-        return list[1], 1
-    end    
+    if #list == 0 then return nil, 0 end
+    if #list == 1 then return list[1], 1 end
     local index = math.random(#list)
     local item = list[index]
 if nisse then
@@ -2851,8 +2900,10 @@ end
 function activateStaggered(source, interval, onActivatedFunc, delay, order)
     Debug("activateStaggered :: source: " .. DumpPretty(source) .. " :: interval: " .. DumpPretty(interval) .. " :: onActivatedFunc: " .. DumpPretty(onActivatedFunc) .. " :: delay: " .. DumpPretty(delay) .. " :: order: " .. DumpPretty(order))
     if isClass(source, SET_BASE) then
+Debug("nisse - activateStaggered :: source is SET_BASE...")
         local table = {}
         if isClass(source, SET_GROUP) then
+Debug("nisse - activateStaggered :: source is SET_GROUP...")
             source:ForEachGroup(function(group) table[#table+1] = group end)
         elseif isClass(source, SET_STATIC) then
             source:ForEachStatic(function(static) table[#table+1] = static end)
@@ -2901,7 +2952,7 @@ function activateStaggered(source, interval, onActivatedFunc, delay, order)
             Debug("activateStaggered :: group " .. group.GroupName .. " was activated")
         end
     end, interval, delay)
-    return sourceactivatedGroups
+    return activatedGroups
 end
 
 function VariableValue:New(value, variance)
@@ -4021,7 +4072,13 @@ function DCAF.Location:New(source, coalition, throwOnFail, debug)
     return DCAF.Location:NewNamed(nil, source, coalition, throwOnFail, debug)
 end
 
+--- Resolves a DCAF.Location from a source (eg. group, unit, static, airbase, coordinate, etc.)
+---@param source any Anything that can be resolved as a location
+---@param coalition any (optional) Specifies location coalition
+---@param debug any (optional) Provides debug information in log when set
+---@return any location A DCAF.Location object if source could be resolved as a location; otherwise nil
 function DCAF.Location.Resolve(source, coalition, debug)
+    if source == nil then return Error("DCAF.Location.Resolve :: `source` cannt be nil") end
     if isClass(source, DCAF.Location.ClassName) then return source end
     local d = DCAF.Location:New(source, coalition, false, debug)
     if d then return d end
@@ -4057,6 +4114,20 @@ end
 
 function DCAF.Location:GetLandHeight()
     return self:GetCoordinate():GetLandHeight()
+end
+
+--- Returns the cardinal direction from this location to another
+---@param toLocation table The location to get cardinal direction to
+---@return string cardinalDirection See #CardinalDirection enum
+function DCAF.Location:GetCardinalDirection(toLocation)
+    local validLocation = DCAF.Location.Resolve(toLocation)
+    if not validLocation then return Error("DCAF.Location:GetCardinalDirection :: `toLocation` is not a valid location: "..DumpPretty(toLocation)) end
+    local coordFrom = self:GetCoordinate()
+    if not coordFrom then return Error("DCAF.Location:GetCardinalDirection :: cannot obtain own coordinate") end
+    local coordTo = validLocation:GetCoordinate()
+    if not coordTo then return Error("DCAF.Location:GetCardinalDirection :: cannot obtain coordinate to location") end
+    local hdg = coordFrom:HeadingTo(coordTo)
+    return CardinalDirection.FromHeading(hdg)
 end
 
 function DCAF.Location:CircleToAll(radius, coalition, color, alpha, fillColor, fillAlpha, lineType, readOnly, text)
@@ -5281,10 +5352,17 @@ local function SendMessageToClient( recipient )
     Warning("MessageTo-"..recipient.." :: Recipient not found")
 end
 
-function SetFlag( name, value, menuKey )
+function SetFlag( name, value, delay )
+    Debug("SetFlag :: "..name.." :: " .. DumpPretty(value))
+    if not isAssignedString(name) then return Error("SetFlag :: `name` must be assigned string, but was: "..DumpPretty(name)) end
     value = value or true
-    trigger.action.setUserFlag(name, value)
-    Trace("SetFlag :: "..name.." :: " .. DumpPretty(value))
+    if isNumber(delay) then
+        DCAF.delay(function()
+            trigger.action.setUserFlag(name, value)
+        end, delay)    
+    else
+        trigger.action.setUserFlag(name, value)
+    end
 end
 
 function GetFlag( name )
@@ -5545,6 +5623,9 @@ function GetRelativeDirection(heading, bearing)
 end
 
 --- Returns an object with three values to describe the relative position between two locations
+--- @param source any An object that can be resolved as a #DCAL.Location
+--- @param target any An object that can be resolved as a #DCAL.Location
+--- @return table relativePosition Table: { Direction = <relative direction>, SlantRange = <meters>, VerticalDiff = <meters> }
 function GetRelativePosition(source, target)
     local sourceLocation = DCAF.Location.Resolve(source)
     local targetLocation = DCAF.Location.Resolve(target)
@@ -5555,7 +5636,7 @@ function GetRelativePosition(source, target)
 
     local heading = sourceLocation:GetHeading()
     local bearing, slantRange = GetBearingAndSlantRange(source, target)
-    if not bearing then return end
+    if not bearing then return nil end
     local rd = GetRelativeDirection(heading, bearing)
     local sourceCoordinate = sourceLocation:GetCoordinate()
     local targetCoordinate = targetLocation:GetCoordinate()
@@ -6490,11 +6571,11 @@ end
 
 --- Makes a group appear to attack but weapons are immediately neutralized, emulating provocation or signalling "final warning" etc.
 --- @param group any - #GROUP, or name of #GROUP
---- @param maxShots number - (optional) [default = 1] specifies max number of feined attacks. A value > 10 specifies time (seconds) before group ALARM state is set to green
+--- @param maxShots any - (optional) [default = 1] specifies max number of feined attacks. A value > 10 specifies time (seconds) before group ALARM state is set to green
 --- @param shootAllowance any - (optional) if null; no shot will be allowed (group will only lock). If number then shot weapon is elimitaed after as many seconds. If boolean allowShot = 1 second
---- @param maxTime number - (optional) specifies maximum time for the feined attack. Oncec it times out it will end (see `funcDone`)
---- @param funcDone function - (optional) function to be called back when all feint attacks are complete
---- @param funcEvent function - (optional) function to be called back for each feint attack (see max)
+--- @param maxTime any - (optional) specifies maximum time for the feined attack. Oncec it times out it will end (see `funcDone`)
+--- @param funcDone any - (optional) function to be called back when all feint attacks are complete
+--- @param funcEvent any - (optional) function to be called back for each feint attack (see max)
 function FeintAttack(group, maxShots, shootAllowance, maxTime, funcDone, funcEvent)
     Debug("FeintAttack :: maxShots: " .. Dump(maxShots) .. " :: shootAllowance: " .. Dump(shootAllowance) .. " :: maxTime: " .. Dump(maxTime) .. " :: funcDone: " .. Dump(funcDone) .. " :: funcEvent: " .. Dump(funcEvent))
     local validGroup = getGroup(group)
@@ -7733,26 +7814,6 @@ Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
     return controllable
 end
 
-function getGroupClosestUnit(group, location)
-    local loc = DCAF.Location.Resolve(location)
-    if not loc then
-        error("GROUP:GetClosestUnit :: cannot resolve #DCAF.Location from: " .. DumpPretty(location)) end
-
-    local coord = loc:GetCoordinate()
-    local minDistance = 65535
-    local closestUnit
-    for _, unit in ipairs(self:GetUnits()) do
-        local coordUnit = unit:GetCoordinate()
-        if coordUnit then
-            local distance = coord:Get2DDistance(coordUnit)
-            if distance < minDistance then
-                minDistance = distance
-                closestUnit = unit
-            end
-        end
-    end
-    return closestUnit
-end
 
 --- Gets the unit that is closest to a specified coordinate
 function GROUP:GetClosestUnit(location)
