@@ -118,8 +118,8 @@ function DCAF_ClientInterceptor:InitLandAirbase(airbase, runway)
     return self
 end
 
-function DCAF_ClientInterceptor:InitLandRoute(altitude, altitudeType, speed)
-    self._landRouting = { Altitude = altitude, AltitudeType = altitudeType, Speed = speed }
+function DCAF_ClientInterceptor:InitLandingRoute(altitude, altitudeType, speed)
+    self._landingRouting = { Altitude = altitude, AltitudeType = altitudeType, Speed = speed }
     return self
 end
 
@@ -149,7 +149,7 @@ function DCAF_ClientInterceptor:Start(delay)
         local interceptor = DCAF.Interceptor:New(unit, ci._coalition):InitRestartInterception(ci._restartInterception)
 -- Debug("nisse - creating..." .. unit.UnitName .. "  :: ci._onCreatedFunc: " .. Dump(ci._onCreatedFunc))
         if ci._landAirbase then interceptor:InitLandAirbase(ci._landAirbase, ci._landRunway) end
-        if ci._landRouting then interceptor:InitLandRout(ci._landRouting.Altitude, ci._landRouting.Speed, ci._landRouting.AltitudeType) end
+        if ci._landingRouting then interceptor:InitLandRout(ci._landingRouting.Altitude, ci._landingRouting.Speed, ci._landingRouting.AltitudeType) end
         if ci._targetUnit then interceptor:InitTargetUnit(ci._targetUnit) end
         if ci._onCreatedFunc then ci._onCreatedFunc(interceptor) end
         interceptor:Start(ci._startDelay)
@@ -158,8 +158,8 @@ function DCAF_ClientInterceptor:Start(delay)
 end
 
 --- Creates an interceptor from group or unit
--- @param #Any source - Can be #UNIT, GROUP, or name of unit/group. Specifies the interceptor source
--- @param #Any filterCoalition - (optional) Can be #Coalition, or (DCS) number (DCS coalition.side enumerator). When set only units from specified coalition can be intercepted
+--- @param source any Can be #UNIT, GROUP, or name of unit/group. Specifies the interceptor source
+--- @param filterCoalition any - (optional) Can be #Coalition, or (DCS) number (DCS coalition.side enumerator). When set only units from specified coalition can be intercepted
 function DCAF.Interceptor:New(source, filterCoalition)
     local validUnit = getUnit(source)
     local me = DCAF.clone(DCAF.Interceptor)
@@ -238,7 +238,7 @@ function DCAF.Interceptor:InitLandAirbase(airbase, runway)
     return self
 end
 
-function DCAF.Interceptor:InitLandRoute(altitude, altitudeType, speed)
+function DCAF.Interceptor:InitLandingRoute(altitude, altitudeType, speed)
     self.LandRouting = { Altitude = altitude, Speed = speed, AltitudeType = altitudeType }
     return self
 end
@@ -290,7 +290,6 @@ end
 
 local function checkInInterceptArea(rp, triggerMaxDistance)
     if rp.SlantRange > triggerMaxDistance then return end
--- MessageTo(nil, "V: " .. rp.VerticalDiff .. " :: D: " .. rp.Direction)
     return rp.SlantRange <= triggerMaxDistance
            and
            (rp.VerticalDiff >= -20 and rp.VerticalDiff < 100)
@@ -306,7 +305,9 @@ function DCAF.Interceptor:_stopScheduler()
 end
 
 function DCAF.Interceptor:_monitorApproach() -- i == #DCAF.Interceptor
--- MessageTo(self.Group, self.GroupName .. " - nisse - APPROACHING...")
+    if self:IsDebug() then
+        MessageTo(self.Group, self.GroupName .. " APPROACHING...")
+    end
     -- look for nearby units. When same unit is in range for three executive scans, trigger _monitorIntercept...
     local TriggerCount = 3
     local TriggerMinDistance = 800 -- meters
@@ -328,19 +329,16 @@ function DCAF.Interceptor:_monitorApproach() -- i == #DCAF.Interceptor
             end
             local distance = me.OwnLocation:GetCoordinate():Get2DDistance(coordTargetUnit)
             if distance > TriggerMinDistance then return end
-            units =  { [0] = { Unit = self.TargetUnit, Distance = distance } }
--- Debug("nisse - DCAF.Interceptor:_monitorApproach :: found single target: " .. me.TargetUnit.UnitName)
+            units =  { { Unit = self.TargetUnit, Distance = distance } }
         else
             local scan = ScanAirborneUnits(me.OwnLocation, TriggerMinDistance, me.FilterCoalition, false, true, nil, true)
             if not scan:Any() then return end
             units = scan.Units
--- Debug("DCAF.Interceptor:_monitorApproach :: scan.Units: " .. DumpPrettyDeep(scan.Units, 2) )
         end
 
         local function isEstablishing(info)
             local unit = info.Unit
-            if not unit:IsAlive()
-               or unit:GetGroup().GroupName == me.Group then return end -- we don't intercept members of same group
+            if not unit:IsAlive() or unit:GetGroup() == me.Group then return end -- we don't intercept members of same group
 
             me._units =  me._units or {}
             local monitorInfo = me._units[unit.UnitName]
@@ -348,7 +346,6 @@ function DCAF.Interceptor:_monitorApproach() -- i == #DCAF.Interceptor
                 me._units[unit.UnitName] = { Unit = unit, Count = 1 }
                 return
             end
--- MessageTo(me.Group, "nisse - approach " .. unit.UnitName .. " = " .. monitorInfo.Count .. "...")
             monitorInfo.Count = monitorInfo.Count + 1
             return monitorInfo.Count == TriggerCount or checkInInterceptArea(GetRelativePosition(me.OwnLocation, unit), TriggerMinDistance)
         end
@@ -483,6 +480,7 @@ local function detectRapidDeparture(interceptor)
     if interceptor._isSignalInhibited then return end
     -- look for >20 degree pitch for 5 seconds...
     local rp = GetRelativePosition(unit, followerUnit)
+    if not rp then return true end
     if rp.SlantRange > NauticalMiles(2) or rp.VerticalDiff > Feet(1500) then return true end
 end
 
@@ -504,7 +502,6 @@ local function detectLoweredGear(interceptor)
 end
 
 function DCAF.Interceptor:_monitorIntercept()
-MessageTo(self.Group, self.Unit.UnitName .. " - nisse - INTERCEPTING...")
     local TriggerMaxDistance = 250 -- meters
 
     self.State = DCAF_Interceptor_State.Intercepting
@@ -516,6 +513,8 @@ MessageTo(self.Group, self.Unit.UnitName .. " - nisse - INTERCEPTING...")
     resetSignals(self.Unit)
     local me = self
     self:_stopScheduler()
+    local interval = .25
+    local timeNeededInInterceptZone = 5 -- TODO consider making time (seconds) needed in intercept zone configurable
     self._schedulerID = DCAF.startScheduler(function()
         me:_stopOnDead()
         local signal
@@ -527,12 +526,27 @@ MessageTo(self.Group, self.Unit.UnitName .. " - nisse - INTERCEPTING...")
         for unitName, info in pairs(me._units) do
             -- interceptor is expected at a -30 --> -80 angle (left side) and fairly same level as intercepted aircraft...
             local rp = GetRelativePosition(me.OwnLocation, info.Unit)
-            local debug_wasInInterceptArea
             local inInterceptArea = checkInInterceptArea(rp, TriggerMaxDistance)
-            if self:IsDebug() then
-                if not debug_wasInInterceptArea and inInterceptArea then
-                    MessageTo(nil, "IN INTERCEPT AREA")
+            if inInterceptArea then
+                if not info._timeInInterceptArea then
+                    info._timeInInterceptArea = timeNeededInInterceptZone
+                    if self:IsDebug() then
+                        MessageTo(self.Group, "IN INTERCEPT AREA")
+                    end
+                elseif not info._isEstablished then
+                    info._timeInInterceptArea = info._timeInInterceptArea - interval
+                    if info._timeInInterceptArea <= 0 then
+                        info._isEstablished = true
+                        self:OnEstablished(info.Unit, info.Distance)
+                    elseif self:IsDebug() then
+                        MessageTo(self.Group, "Remaining Time: "..UTILS.Round(info._timeInInterceptArea))
+                    end
                 end
+            else
+                info._timeInInterceptArea = nil
+                info._isEstablished = nil
+            end
+            if not info._timeInInterceptArea and inInterceptArea then
             end
 -- if isSignalComplete then
 --     Debug("nisse - DCAF.Interceptor:_monitorIntercept :: rp: " .. DumpPretty(rp) .. " :: isInPosition: " .. Dump(inInterceptArea))
@@ -552,11 +566,11 @@ MessageTo(self.Group, self.Unit.UnitName .. " - nisse - INTERCEPTING...")
 Debug("nisse - DCAF.Interceptor:_monitorIntercept :: no aircraft in range :: goto APPROACH phase")
             me:_monitorApproach()
         end
-    end, .25)
+    end, interval)
 end
 
 function DCAF.Interceptor:_monitorLeading()
-    -- look for wing rock (= divert now), lowered gear (=land now), or continous high degree bank (= cancel leading/release following aircraft)
+    -- look for wing rock (= divert now), lowered gear (=land now), or continuous high degree bank (= cancel leading/release following aircraft)
     local me = self
     self:_stopScheduler()
     self._schedulerID = DCAF.startScheduler(function()
@@ -564,6 +578,10 @@ function DCAF.Interceptor:_monitorLeading()
         if not me.Unit:IsAlive() then
             me:OnLeadUnitDead()
             me:Stop(true, "Lead unit dead")
+            return
+        elseif not me.TargetUnit:IsAlive() then
+            me:OnLeadUnitDead()
+            me:Stop(true, "Intercepted unit dead")
             return
         elseif detectSignalWingRock(me) then
             me:OnSignalRelease(me.RestartInterception, true, DCAF.InterceptorSignal.WingRocking)
@@ -609,6 +627,7 @@ end
 --- Enables the interceptor, making interception available to its UNIT/GROUP
 -- @param #number delay - (optional) Will delay the start by this many seconds
 function DCAF.Interceptor:Start(delay)
+    Debug("DCAF.Interceptor:Start :: "..self.Group.GroupName)
     self:_resetInterception()
     if not self.Group then return self end
     if isNumber(delay) then
@@ -646,14 +665,21 @@ Debug("nisse - DCAF.Interceptor:IsLeading :: .State: " .. Dump(self.State))
 end
 
 --- Invoked as interceptor approaches one or more units that can be intercepted
--- @param #table nearbyUnits - A dictionary of nearby units (key=unit name, value={ Unit = #UNIT, Distance = #number (meters) })
+--- @param nearbyUnits table A dictionary of nearby units (key=unit name, value={ Unit = #UNIT, Distance = #number (meters) })
 function DCAF.Interceptor:OnApproaching(nearbyUnits)
     -- to be overridden
 end
 
 --- Invoked when interceptor is close to one or more units that can be intercepted
--- @param #table nearbyUnits - A dictionary of nearby units (key=unit name, value=#UNIT)
+--- @param nearbyUnits table A dictionary of nearby units (key=unit name, value=#UNIT)
 function DCAF.Interceptor:OnEstablishing(nearbyUnits)
+    -- to be overridden
+end
+
+--- Invoked when interceptor is established in the expected intercept zone; to the left of a unit that can be intercepted
+--- @param unit table A unit that can be intercepted
+--- @param distance number Distance from unit (meters)
+function DCAF.Interceptor:OnEstablished(unit, distance)
     -- to be overridden
 end
 
@@ -678,9 +704,9 @@ function DCAF.Interceptor:OnSignalIntercept(unit, signal)
 end
 
 --- Initiates an intercept, targeting a specified unit/group. This function is automatically invoked when interceptor aircraft signals "you are intercepted" (by means of wing rocking  and/or flashing external lights)
--- @param #Any intercepted - The intercepted unit or group. Can be specified as #UNIT, #GROUP, or name of unit/group. When resolved as GROUP, the #1 unit will be selected for interception
--- @param #DCAF.InterceptorSignal signal - Type of signal used
--- @remarks This method simply invokes the DCAF.Interceptor:OnIntercepted function to implement standard behavior from intercepted unit
+--- @param intercepted any The intercepted unit or group. Can be specified as #UNIT, #GROUP, or name of unit/group. When resolved as GROUP, the #1 unit will be selected for interception
+--- @param signal any (optional) [default = Lights] Type of signal used (#DCAF.InterceptorSignal)
+--- @remarks This method simply invokes the DCAF.Interceptor:OnIntercepted function to implement standard behavior from intercepted unit
 function DCAF.Interceptor:Intercept(intercepted, signal)
     local unit = getUnit(intercepted)
     if not unit then
@@ -688,7 +714,7 @@ function DCAF.Interceptor:Intercept(intercepted, signal)
         if not group then return Error("DCAF.Interceptor:Intercept :: cannot resolve intercepted unit: " .. DumpPretty(intercepted)) end
         unit = group:GetUnit(1)
     end
-    if signal == nil then 
+    if signal == nil then
         signal = DCAF.InterceptorSignal.Lights
     elseif signal ~= DCAF.InterceptorSignal.Lights and signal ~= DCAF.InterceptorSignal.WingRocking then
         return Error("DCAF.Interceptor:Intercept :: unsupported signal type: " .. DumpPretty(signal))
@@ -840,18 +866,25 @@ Debug("nisse - DCAF.Interceptor:FollowMe :: " .. self.FollowerGroup.GroupName ..
         controller:popTask()
     end
     -- let follower slip back for a bit before it starts following...
+Debug("nisse - DCAF.Interceptor:FollowMe (bbb)")
     ChangeSpeed(follower, Knots(-50))
+Debug("nisse - DCAF.Interceptor:FollowMe (ccc)")
     DCAF.delay(function()
         controller:pushTask( taskFollow )
     end, 20)
--- MessageTo(nil, "nisse - " .. self.FollowerGroup.GroupName .. " is FOLLOWING " .. self.Unit.UnitName)
+Debug("nisse - DCAF.Interceptor:FollowMe (ddd)")
+    -- MessageTo(nil, "nisse - " .. self.FollowerGroup.GroupName .. " is FOLLOWING " .. self.Unit.UnitName)
     -- self.FollowerGroup:PushTask(taskFollow)
     -- if self._menu then
     --     self:AddPlayerMenus()
     -- end
+Debug("nisse - DCAF.Interceptor:FollowMe (eee)")
     local me = self
+Debug("nisse - DCAF.Interceptor:FollowMe (fff)")
     DCAF.delay(function() me:_monitorLeading() end, 2)
+Debug("nisse - DCAF.Interceptor:FollowMe (ggg)")
     self:OnLeading(self.FollowerUnit)
+Debug("nisse - DCAF.Interceptor:FollowMe (hhh)")
 end
 
 --- Releases follower aircraft, allowing it to continue its route

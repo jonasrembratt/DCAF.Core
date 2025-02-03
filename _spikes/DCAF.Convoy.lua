@@ -19,7 +19,8 @@ DCAF.Convoy = {
 
 --- Creates a convoy from multiple groups, such that each group follows the previous one and tries avoid causing traffic jams
 ---@param groups any - A list of #GROUP, a #SET_GROUP, or a name pattern (string) to automatically include all groups matching that pattern
----@param intervalMeters number - (optional; default = 30) A distance to be used as an interval between each group. Minimum value is 15m (will be enforced)
+---@param name any (optional) [default = name of first group] A name for the convoy
+---@param intervalMeters any - (optional; default = 30) A distance to be used as an interval between each group. Minimum value is 15m (will be enforced)
 function DCAF.Convoy:New(groups, name, intervalMeters)
     if (isAssignedString(groups)) then
         groups = SET_GROUP:New():FilterPrefixes(groups):FilterOnce()

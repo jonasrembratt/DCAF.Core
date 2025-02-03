@@ -1145,6 +1145,13 @@ Debug("nisse - DCAF.Menu:NewCommand :: menu.Menu: "..DumpPretty(menu.Menu))
     return menu
 end
 
+--- Returns flag to indicate whether the menu contains a child menu
+--- @param text string Name (or sub path) of child menu
+function DCAF.Menu:GetChild(text)
+    local key = DCAF_Menu_DB:GetKeyAndPath(self, text, self.Group, self.Coalition)
+    return DCAF_Menu_DB._index[key]
+end
+
 function DCAF.Menu:GetText()
     return self.Menu[#self.Menu]
     -- local path = self.Path
@@ -2114,7 +2121,28 @@ PhoneticAlphabet.NumericPrecision = {
     Thousands = 1000
 }
 
+function verbalDistance(distanceMeters, units)
+    if not isNumber(distanceMeters) then return Error("verbalDistance :: `distanceMeters` must be number, but was: " .. DumpPretty(distanceMeters), "ERROR") end
+    if units == DCAF.Units.Metric then
+        distanceMeters = math.floor(distanceMeters)
+        if distanceMeters < 3000 then
+            return PhoneticAlphabet:ConvertNumber(distanceMeters, PhoneticAlphabet.NumericPrecision.Ten) .. " meters"
+        else
+            local km = math.floor(distanceMeters / 1000)
+            return tostring(km) .. " clicks"
+        end
+    elseif units == DCAF.Units.Imperial then
+        local distanceFeet = math.floor(UTILS.MetersToFeet(distanceMeters))
+        if distanceFeet < 5000 then
+            return PhoneticAlphabet:ConvertNumber(distanceFeet, PhoneticAlphabet.NumericPrecision.Ten) .. " feet"
+        else
+            return tostring(UTILS.MetersToNM(distanceMeters))
+        end
+    end
+end
+
 function PhoneticAlphabet:Convert(text, slow)
+Debug("nisse - PhoneticAlphabet:Convert :: text: "..Dump(text).." :: slow: "..Dump(slow))
     local out = ""
     if not isBoolean(slow) then slow = false end
     for c in string.gmatch(text, '.') do
@@ -2131,7 +2159,12 @@ function PhoneticAlphabet:Convert(text, slow)
     return stringTrim(out)
 end
 
+--- Converts a number to phonetic form, suitable for distance, altitude, etc. Please note, the phonetic form is not separate digits. Use :ConvertToDigits for that
+---@param number number The number to be expressed phonetically
+---@param precision any (optional) Can be set to #PhoneticAlphabet.NumericPrecision
+---@return string phoneticNumberForm The number in phonetic form
 function PhoneticAlphabet:ConvertNumber(number, precision)
+    if not isNumber(number) then return Error("PhoneticAlphabet:ConvertNumber :: `numbre` must be a number, but was: "..DumpPretty(number), "") end
     local s
     if number > 1000 then
         local thousands = math.floor(number / 1000)
@@ -2201,14 +2234,28 @@ end
 --- Converts a decimal value into phonetic 'speech', standardized for frequencies
 ---@param number any The frequency value
 ---@param decimals any (optional) Can be used to limit or 'pad' the decimal element to a specified length (eg. .2 becomes "two zero zero")
+---@param slow any (optional) [default = false] Specifies a result to be read slower (each digit separated by a token to indicate pause)
 ---@return string phoneticFrequency
-function PhoneticAlphabet:ConvertFrequencyNumber(number, decimals)
-Debug("nisse - PhoneticAlphabet:ConvertFrequencyNumber:: "..Dump(number).." :: decimals: "..Dump(decimals))
-    if not isNumber(number) then return Error("PhoneticAlphabet:ConvertFrequencyNumber :: `number` must be numeric value, but was: " .. DumpPretty(number), tostring(number)) end
-    if not isNumber(decimals) then decimals = 1 end
+function PhoneticAlphabet:ConvertFrequencyNumber(number, decimals, slow)
+    if not isNumber(decimals) then decimals = 3 end
+    return self:ConvertToDigits(number, decimals, "decimal", slow)
+end
+
+--- Converts a decimal value into phonetic 'speech', standardized for frequencies
+---@param number any The frequency value
+---@param decimals any (optional) Can be used to limit or 'pad' the decimal element to a specified length (eg. .2 becomes "two zero zero")
+---@param decimalPhrase any (optional) [default = "decimal"] Pass in a value to use a custom phrase for decimal place, instead of the default
+---@param slow any (optional) [default = false] Specifies a result to be read slower (each digit separated by a token to indicate pause)
+---@return string phoneticFrequency
+function PhoneticAlphabet:ConvertToDigits(number, decimals, decimalPhrase, slow)
+    if not isNumber(number) then return Error("PhoneticAlphabet:ConvertToDigits :: `number` must be numeric value, but was: " .. DumpPretty(number), tostring(number)) end
+    if not isNumber(decimals) then decimals = 0 end
     local integer = math.floor(number)
     local text = tostring(number)
     local integerText = tostring(integer)
+    if decimals < 1 then return self:Convert(integerText, slow) end
+
+    -- decimals
     local i = string.len(integerText)+1
     local decimalText = string.sub(text, i+1, string.len(text))
     i = string.len(decimalText)
@@ -2216,7 +2263,157 @@ Debug("nisse - PhoneticAlphabet:ConvertFrequencyNumber:: "..Dump(number).." :: d
         decimalText = decimalText.."0"
         i = string.len(decimalText)
     end
-    return self:Convert(integerText) .. " decimal " .. self:Convert(decimalText)
+    if not isAssignedString(decimalPhrase) then decimalPhrase = "decimal" end
+    return self:Convert(integerText, slow).." "..decimalPhrase.." ".. self:Convert(decimalText, slow)
+end
+
+--- Returns coordinates as phonetic text, represented as bullseye reference
+---@param coord table The coordinates to be represented phonetically as bullseye
+---@return string phonetc The coordinates in phonetic form, as bullseye
+function PhoneticAlphabet:ConvertBullseye(coord)
+    local bearing, distanceNM, name = DCAF.GetBullseye(coord, self.Coalition)
+    if bearing then
+        return name .. ". " .. PhoneticAlphabet:Convert(tostring(UTILS.Round(bearing))) .. ". " .. UTILS.Round(distanceNM)
+    else
+        return "BULLSEYE ERROR"
+    end
+end
+
+--- Returns coordinates as phonetic text, represented as MGRS "keypad" format
+---@param location table The location to be represented phonetically as 'keypad' (any object that can be resolved as a #DCAF.Location)
+---@param omitMapElement any (optional) [default = true] When set, the map name is omitted (for brevity)
+---@return string phonetc The coordinates in phonetic form, as 'keypad'
+function PhoneticAlphabet:ConvertKeypad(location, omitMapElement)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return "KEYPAD ERROR (cannot resolve location)" end
+    local coord = validLocation:GetCoordinate()
+    if not coord then return "KEYPAD ERROR (cannot resolve location coordinate)" end
+    local keypad = coord:ToKeypad()
+    if not keypad then return "KEYPAD ERROR" end
+    if not isBoolean(omitMapElement) then omitMapElement = true end
+    if not omitMapElement then
+        return "Grid! " .. PhoneticAlphabet:Convert(keypad.Map .. " " .. keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
+    else
+        return "Grid! " .. PhoneticAlphabet:Convert(keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
+    end
+end
+
+--- Returns coordinates as phonetic text, represented as MGRS "keypad" format
+---@param location table The location to be represented phonetically as MGRS (any object that can be resolved as a #DCAF.Location)
+---@param elevation any (optional) [default = 'elevation'] When not false, or nil, the location elevation will be included. You can pass in the phrase to be used (if 'elevation' is not suitable)
+---@param slow any (optional) [default = false] Specifies a result to be read slower (each digit separated by a token to indicate pause)
+---@param omitMapElement any (optional) [default = true] When set, the map name is omitted (for brevity)
+---@return string phonetc The coordinates in phonetic form, as MGRS
+function PhoneticAlphabet:ConvertMGRS(location, elevation, slow, omitMapElement)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return "MGRS ERROR (cannot resolve location)" end
+    local coord = validLocation:GetCoordinate()
+    if not coord then return "MGRS ERROR (cannot resolve location coordinate)" end
+
+    local mgrs = coord:ToMGRS()
+    if not mgrs then return "KEYPAD ERROR" end
+    if elevation == nil then elevation = false end
+    if not isAssignedString(elevation) then elevation = "elevation" end
+    if not isBoolean(omitMapElement) then omitMapElement = true end
+
+    if not omitMapElement then
+        local token = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Map .. " " .. mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, slow or true)
+        if not elevation then return token end
+        return token.." "..elevation.." "..PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), slow or true)
+    else
+        local token = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, slow or true)
+        if not elevation then return token end
+        return token.." "..elevation.." "..PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), slow or true)
+    end
+end
+
+--- Returns location as phonetic text, represented as Lat/Long Decimal Minutes
+---@param location table The location to be represented phonetically as MGRS (any object that can be resolved as a #DCAF.Location)
+---@param elevation any (optional) [default = 'elevation'] When not false, or nil, the location elevation will be included. You can pass in the phrase to be used (if 'elevation' is not suitable)
+---@param slow any (optional) [default = false] Specifies a result to be read slower (each digit separated by a token to indicate pause)
+---@return string phonetic
+function PhoneticAlphabet:ConvertLLDM(location, elevation, slow)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return "LLDM ERROR (cannot resolve location)" end
+    location = validLocation
+    local vec3 = location:GetVec3()
+    if not vec3 then return "LLDM ERROR (location could not provide a Vec3 point)" end
+
+    local lat, lon = coord.LOtoLL(vec3)
+    local latDir = lat >= 0 and "Northing" or "South"
+    local lonDir = lon >= 0 and "Easting" or "West"
+    local absLat = math.abs(lat)
+    local absLon = math.abs(lon)
+
+    local function punctuateInteger(number)
+        return PhoneticAlphabet:ConvertToDigits(number, 0, nil, slow)
+    end
+
+    local function punctuateDecimal(number)
+        return PhoneticAlphabet:ConvertToDigits(UTILS.Round(number, 3), 3, "..", slow)
+    end
+
+    local degrees = math.floor(absLat)
+    local latMinutes = punctuateDecimal((absLat - degrees) * 60)
+    local latDegrees = punctuateInteger(degrees)
+    degrees = math.floor(absLon)
+    local lonMinutes = punctuateDecimal((absLon - degrees) * 60)
+    local lonDegrees = punctuateInteger(degrees)
+    if string.len(lonDegrees) < 4 then lonDegrees = "Zero."..lonDegrees end
+
+    local lldm = latDir..". "..latDegrees.." decimal. "..latMinutes.."..."..lonDir..". "..lonDegrees..". decimal. "..lonMinutes
+    if elevation == nil then elevation = false end
+    if not elevation then return lldm end
+    if not isAssignedString(elevation) then elevation = "Elevation" end
+    return lldm..". "..elevation..". "..PhoneticAlphabet:ConvertToDigits(UTILS.MetersToFeet(location:GetASL()))
+end
+
+
+--- Returns two coordinates as phonetic text, represented in reference between two locations, with identifiers
+---@param locations table List of two locations (any object that can be represented as a #DCAF.Location)
+---@param identifiers table List of two strings, used as identifiers for the two locations
+---@return string phonetc The coordinates in phonetic form, in reference to location
+function PhoneticAlphabet:ConvertReferencePoint(locations, identifiers)
+    if not locations or not isList(locations) or #locations < 2 then return "RP ERROR (expected 2 locations)" end
+    if not identifiers or not isList(identifiers) or #identifiers < 2 then return "RP ERROR (expected 2 identifiers)" end
+    local coordinates = {}
+    local validLocation = DCAF.Location.Resolve(locations[1])
+    if not validLocation then return Error("PhoneticAlphabet:ConvertReferencePoint :: could not resolve volcation #1: "..DumpPretty(locations[1])) end
+    coordinates[1] = validLocation:GetCoordinate()
+    validLocation = DCAF.Location.Resolve(locations[2])
+    if not validLocation then return Error("PhoneticAlphabet:ConvertReferencePoint :: could not resolve volcation 21: "..DumpPretty(locations[2])) end
+    coordinates[2] = validLocation:GetCoordinate()
+
+    local coordRP = coordinates[1]
+    local coordLoc = coordinates[2]
+    local heading = coordRP:HeadingTo(coordLoc)
+    if heading < 100 then
+        heading = '0'..tostring(math.floor(heading))
+    else
+        heading = tostring(math.floor(heading))
+    end
+    local distanceMeters = coordRP:Get2DDistance(coordLoc)
+    return "Reference " .. identifiers[1] .. ". " .. PhoneticAlphabet:Convert(heading) .. ". " .. verbalDistance(distanceMeters)
+end
+
+function PhoneticAlphabet:ConvertLatLongStandard(coord)
+    
+end
+
+function COORDINATE:ToPhoneticBullseye()
+    return PhoneticAlphabet:ConvertBullseye(self)
+end
+
+function COORDINATE:ToPhoneticKeypad(omitMapElement)
+    return PhoneticAlphabet:ConvertKeypad(self, omitMapElement)
+end
+
+function COORDINATE:ToPhoneticMGRS(elevation, omitMapElement)
+    return PhoneticAlphabet:ConvertMGRS(self, elevation, omitMapElement)
+end
+
+function COORDINATE:ToPhoneticLLDM(elevation)
+    return PhoneticAlphabet:ConvertLLDM(self, elevation)
 end
 
 function DCAF.trimInstanceFromName( name, qualifierAt )
@@ -3960,8 +4157,7 @@ function DCAF.Location:NewRaw(name, source, coordinate, coalition)
 end
 
 function DCAF.Location:NewNamed(name, source, coalition, throwOnFail, debug)
-    if source == nil then
-        error("DCAF.Location:New :: `source` cannot be unassigned") end
+    if source == nil then return Error("DCAF.Location:New :: `source` cannot be unassigned") end
 
     if debug then Debug("DCAF.Location:NewNamed :: source: " .. DumpPretty(source)) end
 
@@ -4045,11 +4241,10 @@ function DCAF.Location:NewNamed(name, source, coalition, throwOnFail, debug)
         local static = getStatic(source)
         if static then return DCAF.Location:New(static) end
 
-        if throwOnFail then
+        if throwOnFail then return
             error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
         else
-            Error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
-            return location
+            return Error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source), location)
         end
     end
 end
@@ -4275,6 +4470,20 @@ function DCAF.Location:OffsetAltitude(value)
     return self
 end
 
+function DCAF.Location:GetVec2()
+    -- this is mainly just so we can separate from MOOSE in the future
+    local coord = self:GetCoordinate()
+    if not coord then return end
+    return coord:GetVec2()
+end
+
+function DCAF.Location:GetVec3()
+    -- this is mainly just so we can separate from MOOSE in the future
+    local coord = self:GetCoordinate()
+    if not coord then return end
+    return coord:GetVec3()
+end
+
 function DCAF.Location:GetCoordinate(enforceAltitude, asl)
     if self._funcGetCoordinate then
         return self._funcGetCoordinate(self)
@@ -4329,6 +4538,17 @@ function DCAF.Location:GetAGL()
     end
 
     return self.Coordinate.y - self.Coordinate:GetLandHeight()
+end
+
+function DCAF.Location:GetASL()
+Debug("DCAF.Location:GetASL (---)")
+    if isUnit(self.Source) or isGroup(self.Source) then
+Debug("DCAF.Location:GetASL (aaa)")
+        return self.Source:GetAltitude(false)
+    end
+
+Debug("DCAF.Location:GetASL (bbb) :: Coordinate: "..Dump(self.Coordinate))
+    return self.Coordinate.y
 end
 
 --- Examines a 'location' and returns a value to indicate it is airborne
@@ -13640,6 +13860,7 @@ local function trackWeapons()
                 wpnTrack:End()
             end
         elseif not wpnTrack._isEnded then
+Debug("nisse - trackWeapons() :: we have impact")
             -- we have impact...
             local ip = land.getIP(wpnTrack.Point, wpnTrack.Direction, lookahead(wpnTrack.Velocity))  -- terrain intersection point with weapon's nose.  Only search out 20 meters though.
             local impactPoint
@@ -13666,8 +13887,9 @@ local function startScheduler()
 end
 
 local function stopScheduler()
+Debug("nisse - stopScheduler()")
     if DCAF_TrackWeaponsScheduleID then
-        DCAF.stopScheduler(DCAF_TrackWeaponsScheduleID)
+        pcall(function() DCAF.stopScheduler(DCAF_TrackWeaponsScheduleID) end)
         DCAF_TrackWeaponsScheduleID = nil
     end
 end
@@ -13855,9 +14077,11 @@ function DCAF.WpnTracker:OnImpact(wpnTrack)
 end
 
 function DCAF.WpnTracker:End()
+Debug("nisse - DCAF.WpnTracker:End")
     self.IsRunning = false
     local countTrackers = removeWpnTracker(self.Name)
     if countTrackers == 0 then
+Debug("nisse - DCAF.WpnTracker:End :: stops tracking weapons")
         -- no trackers remaining - stop tracking weapons
         MissionEvents:EndOnWeaponFired(newWpnTrack)
         stopScheduler()
@@ -13865,8 +14089,9 @@ function DCAF.WpnTracker:End()
 end
 
 function DCAF.WpnTracking:Start(tracker)
+Debug("nisse - DCAF.WpnTracking:Start :: tracker: "..DumpPretty(tracker).." :: DCAF_TrackWeaponsScheduleID: "..Dump(DCAF_TrackWeaponsScheduleID))
     if not isClass(tracker, DCAF.WpnTracker.ClassName) then
-        error("DCAF.WeaponTracking:Start :: `tracker` must be #" .. DCAF.WpnTracker.ClassName .. ", but was: " .. DumpPretty(tracker)) end
+        return Error("DCAF.WeaponTracking:Start :: `tracker` must be #" .. DCAF.WpnTracker.ClassName .. ", but was: " .. DumpPretty(tracker)) end
 
     local isRunning = DCAF_TrackWeaponsScheduleID ~= nil
     local restart
@@ -13875,10 +14100,10 @@ function DCAF.WpnTracking:Start(tracker)
         restart = true
     end
     if not isRunning then
+Debug("nisse - DCAF.WpnTracking:Start :: registers OnWeaponFired event handler")
         MissionEvents:OnWeaponFired(newWpnTrack)
     end
-    if not restart then
-        return end
+    if not restart then return end
 
     stopScheduler()
     if DCAF_WpnTracksCount > 0 then

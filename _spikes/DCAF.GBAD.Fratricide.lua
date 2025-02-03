@@ -1,5 +1,5 @@
 --- /////////////////////////////////////////////////
---- This emulates a SAM site that makes a mistake and nearly causes a Blue-on-Blue fratricide
+--- This emulates a SAM site that makes a mistake and causes a fratricide (or a near-miss)
 
 DCAF.GBAD.FratricideRisk = {
     Oups = "Oups",             -- missile is fired but is neutralized almost immediately

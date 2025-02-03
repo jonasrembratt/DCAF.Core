@@ -127,6 +127,16 @@ function DCAF.PlayerReconTask:HandleMapMarker(funcOnMark)
         end
         return false
     end
+    
+    local function isProximity(coord)
+        local location = self._requireProximity.Location
+        local coordLocation = location:GetCoordinate()
+        if not coordLocation then return Error("DCAF.PlayerReconTask:HandleMapMarker:HandleMapMarker :: cannot get coordinate for location") end
+        local distance = coord:Get2DDistance(coordLocation)
+        local maxDistance = self._requireProximity.MaxDistance
+        Debug("DCAF.PlayerReconTask:HandleMapMarker:EnableFlightMarkerRecon :: distance: "..distance.." m".." :: maxDistance: "..maxDistance.." m")
+        return distance < maxDistance
+    end
 
     self._mapMarkerEventSink = BASE:New()
     self._mapMarkerEventSink:HandleEvent(EVENTS.MarkAdded, function(_, e)
@@ -134,7 +144,15 @@ Debug("nisse - DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: e: " .. DumpP
         local initiator = e.IniUnit or e.initiator
         local iniUnit
         local playerName
-        if not initiator then return Error("DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: no initiator object in event") end
+        if self._requireProximity and not isProximity(e.MarkCoordinate) then return end
+
+        if not initiator then
+            if self._requireInitiator then return Error("DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: no initiator object in event") end
+            -- we're ok as long as the marker is within accepted distance
+            local ok, err = pcall(function() funcOnMark(self, e) end)
+            if not ok then Error("DCAF.PlayerReconTask:HandleMapMarker :: error in callback: " .. DumpPretty(err)) end
+            return
+        end
         if isClass(initiator, UNIT) then
 Debug("nisse - DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: initiator is UNIT")
             iniUnit = initiator
@@ -155,6 +173,23 @@ Debug("nisse - DCAF.PlayerReconTask:HandleMapMarker_HandleEvent :: initiator is 
         if not ok then Error("DCAF.PlayerReconTask:HandleMapMarker :: error in callback: " .. DumpPretty(err)) end
     end)
 
+    return self
+end
+
+function DCAF.PlayerReconTask:RequireInitiator(value)
+    if not isBoolean(value) then value = true end
+    self._requireInitiator = value
+    return self
+end
+
+function DCAF.PlayerReconTask:RequireProximity(location, maxDistance)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return Error("DCAF.PlayerReconTask:RequireProximity :: cannot resolve `location`: "..DumpPretty(location)) end
+    if not isNumber(maxDistance) or maxDistance < 1 then return Error("DCAF.PlayerReconTask:RequireProximity :: `maxDistance` must be numeric value >= 1, but was: "..DumpPretty(maxDistance)) end
+    self._requireProximity = {
+        Location = location,
+        MaxDistance = maxDistance
+    }
     return self
 end
 
