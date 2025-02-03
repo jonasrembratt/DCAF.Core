@@ -76,6 +76,15 @@ DCAF.Units = {
     Metric = "Metric"      -- meters / klicks
 }
 
+function DCAF.StackTrace(message)
+    if message then
+        return message .. " :: " .. debug.traceback()
+    else
+        return debug.traceback()
+    end
+    -- return BASE.Debug.traceback()
+end
+
 local _debugId = 0
 local function get_next_debugId()
     _debugId = _debugId + 1
@@ -246,7 +255,7 @@ function isClass( value, class )
     end
     if value.ClassName == class then return true end
     local metatable = getmetatable(value)
-    if metatable then return isClass(metatable, class) end
+    if metatable then return isClass(metatable.__index, class) or isClass(metatable, class) end
 end
 function isUnit( value ) return isClass(value, UNIT) end
 function isGroup( value ) return isClass(value, GROUP) end
@@ -277,6 +286,15 @@ function trimSpawnIndex(s)
 
     local trimmed = string.sub(s, 1, start-1)
     return trimmed
+end
+
+--- Removes all surplus whitespace from a string
+---@param input string The string to trim surplus whitespace from
+---@return string The trimmed string
+function trimSurplusWhitespace(input)
+    local result = input:match("^%s*(.-)%s*$")
+    result = result:gsub("%s+", " ")
+    return result
 end
 
 function escapePattern(text)
@@ -727,6 +745,14 @@ function getGroup( source, data, dataKey )
     end
 end
 
+function getUnitOrGroupOrStatic(source)
+    local unit = getUnit(source)
+    if unit then return unit end
+    local group = getGroup(source)
+    if group then return group end
+    return getStatic(source)
+end
+
 function getControllable( source )
     local unit = getUnit(source)
     if (unit ~= nil) then
@@ -740,15 +766,10 @@ function getControllable( source )
 end
 
 function getStatic( source )
-    if isStatic(source) then
-        return source end
-    if not isAssignedString(source) then
-        return end
-
+    if isStatic(source) then return source end
+    if not isAssignedString(source) then return Error("getStatic :: cannot resolve `source`: "..DumpPretty(source)) end
     local static
-    pcall(function()
-        static = STATIC:FindByName(source)
-    end)
+    pcall(function() static = STATIC:FindByName(source) end)
     return static
 end
 
@@ -793,6 +814,8 @@ end
 ---@param group any Can be #GROUP, #UNIT, or name of group/unit. Must be resolvable to a #GROUP
 ---@param location any Can be anything that can be resolved into a #DCAF.Location
 function getGroupClosestUnit(group, location)
+Debug("nisse - getGroupClosestUnit :: group: "..group.GroupName)
+
     local validGroup = getGroup(group)
     if not validGroup then return Error("getGroupClosestUnit :: could not resolve `group`: " .. DumpPretty(group)) end
     local validLocation = DCAF.Location.Resolve(location)
@@ -800,19 +823,48 @@ function getGroupClosestUnit(group, location)
     group = validGroup
     local coordLocation = validLocation:GetCoordinate()
     local units = group:GetUnits()
+Debug("nisse - getGroupClosestUnit :: units: "..DumpPretty(units))
     local closestUnit
     local closestDistance = NauticalMiles(9999)
+
     local function measure(unit)
+Debug("nisse - getGroupClosestUnit :: unit: "..DumpPretty(unit))
         local coordUnit = unit:GetCoordinate()
-        if not coordUnit then return end
+        if not coordUnit then
+Debug("nisse - getGroupClosestUnit :: no coord for unit: "..unit.UnitName)
+            return
+        end
         local distance = coordUnit:Get2DDistance(coordLocation)
+Debug("nisse - getGroupClosestUnit :: distance: "..distance)
         if distance > closestDistance then return end
         closestDistance = distance
         closestUnit = unit
     end
+
     for _, unit in ipairs(units) do measure(unit) end
     return closestUnit, closestDistance
 end
+
+-- function getGroupClosestUnit(group, location)
+--     local loc = DCAF.Location.Resolve(location)
+--     if not loc then
+--         error("GROUP:GetClosestUnit :: cannot resolve #DCAF.Location from: " .. DumpPretty(location)) end
+
+--     local coord = loc:GetCoordinate()
+--     local minDistance = 65535
+--     local closestUnit
+--     for _, unit in ipairs(group:GetUnits()) do
+--         local coordUnit = unit:GetCoordinate()
+--         if coordUnit then
+--             local distance = coord:Get2DDistance(coordUnit)
+--             if distance < minDistance then
+--                 minDistance = distance
+--                 closestUnit = unit
+--             end
+--         end
+--     end
+--     return closestUnit
+-- end
 
 function getZone( source )
     if isZone(source) then
@@ -903,11 +955,14 @@ end
 function DCAF_Menu_DB:Remove(menu, removeEmptyParent)
     Debug(DCAF.Menu.ClassName..":Remove :: "..menu.Path.." :: removeEmptyParent: "..Dump(removeEmptyParent).." :: menu.Menu: "..DumpPretty(menu.Menu))
     if menu.Group then
+        Debug(DCAF.Menu.ClassName..":Remove :: Removes group menu: "..menu.Key)
         local groupId = menu.Group:GetID()
         missionCommands.removeItemForGroup(groupId, menu.Menu)
     elseif menu.Coalition then
+        Debug(DCAF.Menu.ClassName..":Remove :: Removes coalition menu: "..menu.Key)
         missionCommands.removeItemForCoalition(menu.Coalition, menu.Menu)
     else
+        Debug(DCAF.Menu.ClassName..":Remove :: Removes mission menu: "..menu.Key)
         missionCommands.removeItem(menu.Menu)
     end
     self._index[menu.Key] = nil
@@ -1090,6 +1145,13 @@ Debug("nisse - DCAF.Menu:NewCommand :: menu.Menu: "..DumpPretty(menu.Menu))
     return menu
 end
 
+--- Returns flag to indicate whether the menu contains a child menu
+--- @param text string Name (or sub path) of child menu
+function DCAF.Menu:GetChild(text)
+    local key = DCAF_Menu_DB:GetKeyAndPath(self, text, self.Group, self.Coalition)
+    return DCAF_Menu_DB._index[key]
+end
+
 function DCAF.Menu:GetText()
     return self.Menu[#self.Menu]
     -- local path = self.Path
@@ -1218,7 +1280,7 @@ end
 
 --- Returns a frequency (#DCAF.Frequency)
 ---@param name string Name of requested frequency
----@param systemName string (optional) [defaul = current frequency system name] Specifies an alternative frequency system
+---@param systemName any (optional) [defaul = current frequency system name] Specifies an alternative frequency system
 ---@return any frequency A #DCAF.Frequency if it is supported by frequency system; otherwise nil
 function DCAF.Frequencies:Get(name, systemName)
     if not isAssignedString(name) then return Error("DCAF.Frequencies:Get :: `name` must be assigned string, but was: " .. DumpPretty(name)) end
@@ -1256,7 +1318,7 @@ end
 function DCAF.Frequency:New(freq, mod, name, notes)
     local f = DCAF.clone(DCAF.Frequency)
     if not isNumber(freq) then return Error("DCAF.Frequency:New :: ") end
-Debug("nisse - DCAF.Frequency:New :: AM: " .. Dump(AM) .. " :: mod: " .. Dump(mod))
+-- Debug("nisse - DCAF.Frequency:New :: AM: " .. Dump(AM) .. " :: mod: " .. Dump(mod).." :: "..DCAF.StackTrace())
     if isAssignedString(mod) and mod ~= AM and mod ~= FM then return Error("DCAF.Frequency:New :: invalid modulation: " .. mod) end
     if name ~= nil and not isAssignedString(name) then return Error("DCAF.Frequency:NewNamed :: `name` must be assigned string, but was: " .. DumpPretty(name)) end
     if notes ~= nil and not isAssignedString(notes) then return Error("DCAF.Frequency:New :: notes must be string, but was: " .. DumpPretty(notes)) end
@@ -1687,6 +1749,12 @@ function listReverse(list)
     return reversed
 end
 
+function stringCamelToDisplay(input)
+    local result = input:sub(1, 1):upper() .. input:sub(2)
+    result = result:gsub("(%u)", " %1")
+    return result:gsub("^%s+", "")
+end
+
 function stringStartsWith(s, prefix)
     if not isAssignedString(s) or not isAssignedString(prefix) then
         return end
@@ -2053,7 +2121,28 @@ PhoneticAlphabet.NumericPrecision = {
     Thousands = 1000
 }
 
+function verbalDistance(distanceMeters, units)
+    if not isNumber(distanceMeters) then return Error("verbalDistance :: `distanceMeters` must be number, but was: " .. DumpPretty(distanceMeters), "ERROR") end
+    if units == DCAF.Units.Metric then
+        distanceMeters = math.floor(distanceMeters)
+        if distanceMeters < 3000 then
+            return PhoneticAlphabet:ConvertNumber(distanceMeters, PhoneticAlphabet.NumericPrecision.Ten) .. " meters"
+        else
+            local km = math.floor(distanceMeters / 1000)
+            return tostring(km) .. " clicks"
+        end
+    elseif units == DCAF.Units.Imperial then
+        local distanceFeet = math.floor(UTILS.MetersToFeet(distanceMeters))
+        if distanceFeet < 5000 then
+            return PhoneticAlphabet:ConvertNumber(distanceFeet, PhoneticAlphabet.NumericPrecision.Ten) .. " feet"
+        else
+            return tostring(UTILS.MetersToNM(distanceMeters))
+        end
+    end
+end
+
 function PhoneticAlphabet:Convert(text, slow)
+Debug("nisse - PhoneticAlphabet:Convert :: text: "..Dump(text).." :: slow: "..Dump(slow))
     local out = ""
     if not isBoolean(slow) then slow = false end
     for c in string.gmatch(text, '.') do
@@ -2070,9 +2159,13 @@ function PhoneticAlphabet:Convert(text, slow)
     return stringTrim(out)
 end
 
+--- Converts a number to phonetic form, suitable for distance, altitude, etc. Please note, the phonetic form is not separate digits. Use :ConvertToDigits for that
+---@param number number The number to be expressed phonetically
+---@param precision any (optional) Can be set to #PhoneticAlphabet.NumericPrecision
+---@return string phoneticNumberForm The number in phonetic form
 function PhoneticAlphabet:ConvertNumber(number, precision)
+    if not isNumber(number) then return Error("PhoneticAlphabet:ConvertNumber :: `numbre` must be a number, but was: "..DumpPretty(number), "") end
     local s
-Debug("nisse - PhoneticAlphabet:ConvertNumber :: number: " .. Dump(number) .. " :: precision: " .. Dump(precision))
     if number > 1000 then
         local thousands = math.floor(number / 1000)
 Debug("nisse - PhoneticAlphabet:ConvertNumber :: thousands: " .. Dump(thousands))
@@ -2141,14 +2234,28 @@ end
 --- Converts a decimal value into phonetic 'speech', standardized for frequencies
 ---@param number any The frequency value
 ---@param decimals any (optional) Can be used to limit or 'pad' the decimal element to a specified length (eg. .2 becomes "two zero zero")
+---@param slow any (optional) [default = false] Specifies a result to be read slower (each digit separated by a token to indicate pause)
 ---@return string phoneticFrequency
-function PhoneticAlphabet:ConvertFrequencyNumber(number, decimals)
-Debug("nisse - PhoneticAlphabet:ConvertFrequencyNumber:: "..Dump(number).." :: decimals: "..Dump(decimals))
-    if not isNumber(number) then return Error("PhoneticAlphabet:ConvertFrequencyNumber :: `number` must be numeric value, but was: " .. DumpPretty(number), tostring(number)) end
-    if not isNumber(decimals) then decimals = 1 end
+function PhoneticAlphabet:ConvertFrequencyNumber(number, decimals, slow)
+    if not isNumber(decimals) then decimals = 3 end
+    return self:ConvertToDigits(number, decimals, "decimal", slow)
+end
+
+--- Converts a decimal value into phonetic 'speech', standardized for frequencies
+---@param number any The frequency value
+---@param decimals any (optional) Can be used to limit or 'pad' the decimal element to a specified length (eg. .2 becomes "two zero zero")
+---@param decimalPhrase any (optional) [default = "decimal"] Pass in a value to use a custom phrase for decimal place, instead of the default
+---@param slow any (optional) [default = false] Specifies a result to be read slower (each digit separated by a token to indicate pause)
+---@return string phoneticFrequency
+function PhoneticAlphabet:ConvertToDigits(number, decimals, decimalPhrase, slow)
+    if not isNumber(number) then return Error("PhoneticAlphabet:ConvertToDigits :: `number` must be numeric value, but was: " .. DumpPretty(number), tostring(number)) end
+    if not isNumber(decimals) then decimals = 0 end
     local integer = math.floor(number)
     local text = tostring(number)
     local integerText = tostring(integer)
+    if decimals < 1 then return self:Convert(integerText, slow) end
+
+    -- decimals
     local i = string.len(integerText)+1
     local decimalText = string.sub(text, i+1, string.len(text))
     i = string.len(decimalText)
@@ -2156,7 +2263,157 @@ Debug("nisse - PhoneticAlphabet:ConvertFrequencyNumber:: "..Dump(number).." :: d
         decimalText = decimalText.."0"
         i = string.len(decimalText)
     end
-    return self:Convert(integerText) .. " decimal " .. self:Convert(decimalText)
+    if not isAssignedString(decimalPhrase) then decimalPhrase = "decimal" end
+    return self:Convert(integerText, slow).." "..decimalPhrase.." ".. self:Convert(decimalText, slow)
+end
+
+--- Returns coordinates as phonetic text, represented as bullseye reference
+---@param coord table The coordinates to be represented phonetically as bullseye
+---@return string phonetc The coordinates in phonetic form, as bullseye
+function PhoneticAlphabet:ConvertBullseye(coord)
+    local bearing, distanceNM, name = DCAF.GetBullseye(coord, self.Coalition)
+    if bearing then
+        return name .. ". " .. PhoneticAlphabet:Convert(tostring(UTILS.Round(bearing))) .. ". " .. UTILS.Round(distanceNM)
+    else
+        return "BULLSEYE ERROR"
+    end
+end
+
+--- Returns coordinates as phonetic text, represented as MGRS "keypad" format
+---@param location table The location to be represented phonetically as 'keypad' (any object that can be resolved as a #DCAF.Location)
+---@param omitMapElement any (optional) [default = true] When set, the map name is omitted (for brevity)
+---@return string phonetc The coordinates in phonetic form, as 'keypad'
+function PhoneticAlphabet:ConvertKeypad(location, omitMapElement)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return "KEYPAD ERROR (cannot resolve location)" end
+    local coord = validLocation:GetCoordinate()
+    if not coord then return "KEYPAD ERROR (cannot resolve location coordinate)" end
+    local keypad = coord:ToKeypad()
+    if not keypad then return "KEYPAD ERROR" end
+    if not isBoolean(omitMapElement) then omitMapElement = true end
+    if not omitMapElement then
+        return "Grid! " .. PhoneticAlphabet:Convert(keypad.Map .. " " .. keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
+    else
+        return "Grid! " .. PhoneticAlphabet:Convert(keypad.Grid, true)  .. " Keypad " .. PhoneticAlphabet:Convert(keypad.Keypad, true)
+    end
+end
+
+--- Returns coordinates as phonetic text, represented as MGRS "keypad" format
+---@param location table The location to be represented phonetically as MGRS (any object that can be resolved as a #DCAF.Location)
+---@param elevation any (optional) [default = 'elevation'] When not false, or nil, the location elevation will be included. You can pass in the phrase to be used (if 'elevation' is not suitable)
+---@param slow any (optional) [default = false] Specifies a result to be read slower (each digit separated by a token to indicate pause)
+---@param omitMapElement any (optional) [default = true] When set, the map name is omitted (for brevity)
+---@return string phonetc The coordinates in phonetic form, as MGRS
+function PhoneticAlphabet:ConvertMGRS(location, elevation, slow, omitMapElement)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return "MGRS ERROR (cannot resolve location)" end
+    local coord = validLocation:GetCoordinate()
+    if not coord then return "MGRS ERROR (cannot resolve location coordinate)" end
+
+    local mgrs = coord:ToMGRS()
+    if not mgrs then return "KEYPAD ERROR" end
+    if elevation == nil then elevation = false end
+    if not isAssignedString(elevation) then elevation = "elevation" end
+    if not isBoolean(omitMapElement) then omitMapElement = true end
+
+    if not omitMapElement then
+        local token = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Map .. " " .. mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, slow or true)
+        if not elevation then return token end
+        return token.." "..elevation.." "..PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), slow or true)
+    else
+        local token = "Grid! " .. PhoneticAlphabet:Convert(mgrs.Grid .. " " .. mgrs.X .. " " .. mgrs.Y, slow or true)
+        if not elevation then return token end
+        return token.." "..elevation.." "..PhoneticAlphabet:Convert(math.floor(mgrs.Elevation), slow or true)
+    end
+end
+
+--- Returns location as phonetic text, represented as Lat/Long Decimal Minutes
+---@param location table The location to be represented phonetically as MGRS (any object that can be resolved as a #DCAF.Location)
+---@param elevation any (optional) [default = 'elevation'] When not false, or nil, the location elevation will be included. You can pass in the phrase to be used (if 'elevation' is not suitable)
+---@param slow any (optional) [default = false] Specifies a result to be read slower (each digit separated by a token to indicate pause)
+---@return string phonetic
+function PhoneticAlphabet:ConvertLLDM(location, elevation, slow)
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return "LLDM ERROR (cannot resolve location)" end
+    location = validLocation
+    local vec3 = location:GetVec3()
+    if not vec3 then return "LLDM ERROR (location could not provide a Vec3 point)" end
+
+    local lat, lon = coord.LOtoLL(vec3)
+    local latDir = lat >= 0 and "Northing" or "South"
+    local lonDir = lon >= 0 and "Easting" or "West"
+    local absLat = math.abs(lat)
+    local absLon = math.abs(lon)
+
+    local function punctuateInteger(number)
+        return PhoneticAlphabet:ConvertToDigits(number, 0, nil, slow)
+    end
+
+    local function punctuateDecimal(number)
+        return PhoneticAlphabet:ConvertToDigits(UTILS.Round(number, 3), 3, "..", slow)
+    end
+
+    local degrees = math.floor(absLat)
+    local latMinutes = punctuateDecimal((absLat - degrees) * 60)
+    local latDegrees = punctuateInteger(degrees)
+    degrees = math.floor(absLon)
+    local lonMinutes = punctuateDecimal((absLon - degrees) * 60)
+    local lonDegrees = punctuateInteger(degrees)
+    if string.len(lonDegrees) < 4 then lonDegrees = "Zero."..lonDegrees end
+
+    local lldm = latDir..". "..latDegrees.." decimal. "..latMinutes.."..."..lonDir..". "..lonDegrees..". decimal. "..lonMinutes
+    if elevation == nil then elevation = false end
+    if not elevation then return lldm end
+    if not isAssignedString(elevation) then elevation = "Elevation" end
+    return lldm..". "..elevation..". "..PhoneticAlphabet:ConvertToDigits(UTILS.MetersToFeet(location:GetASL()))
+end
+
+
+--- Returns two coordinates as phonetic text, represented in reference between two locations, with identifiers
+---@param locations table List of two locations (any object that can be represented as a #DCAF.Location)
+---@param identifiers table List of two strings, used as identifiers for the two locations
+---@return string phonetc The coordinates in phonetic form, in reference to location
+function PhoneticAlphabet:ConvertReferencePoint(locations, identifiers)
+    if not locations or not isList(locations) or #locations < 2 then return "RP ERROR (expected 2 locations)" end
+    if not identifiers or not isList(identifiers) or #identifiers < 2 then return "RP ERROR (expected 2 identifiers)" end
+    local coordinates = {}
+    local validLocation = DCAF.Location.Resolve(locations[1])
+    if not validLocation then return Error("PhoneticAlphabet:ConvertReferencePoint :: could not resolve volcation #1: "..DumpPretty(locations[1])) end
+    coordinates[1] = validLocation:GetCoordinate()
+    validLocation = DCAF.Location.Resolve(locations[2])
+    if not validLocation then return Error("PhoneticAlphabet:ConvertReferencePoint :: could not resolve volcation 21: "..DumpPretty(locations[2])) end
+    coordinates[2] = validLocation:GetCoordinate()
+
+    local coordRP = coordinates[1]
+    local coordLoc = coordinates[2]
+    local heading = coordRP:HeadingTo(coordLoc)
+    if heading < 100 then
+        heading = '0'..tostring(math.floor(heading))
+    else
+        heading = tostring(math.floor(heading))
+    end
+    local distanceMeters = coordRP:Get2DDistance(coordLoc)
+    return "Reference " .. identifiers[1] .. ". " .. PhoneticAlphabet:Convert(heading) .. ". " .. verbalDistance(distanceMeters)
+end
+
+function PhoneticAlphabet:ConvertLatLongStandard(coord)
+    
+end
+
+function COORDINATE:ToPhoneticBullseye()
+    return PhoneticAlphabet:ConvertBullseye(self)
+end
+
+function COORDINATE:ToPhoneticKeypad(omitMapElement)
+    return PhoneticAlphabet:ConvertKeypad(self, omitMapElement)
+end
+
+function COORDINATE:ToPhoneticMGRS(elevation, omitMapElement)
+    return PhoneticAlphabet:ConvertMGRS(self, elevation, omitMapElement)
+end
+
+function COORDINATE:ToPhoneticLLDM(elevation)
+    return PhoneticAlphabet:ConvertLLDM(self, elevation)
 end
 
 function DCAF.trimInstanceFromName( name, qualifierAt )
@@ -2227,15 +2484,6 @@ function UTILS.SecondsToClock(seconds, short, trimSeconds)
         -- end
 
     end
-end
-
-function DCAF.StackTrace(message)
-    if message then
-        return message .. " :: " .. debug.traceback()
-    else
-        return debug.traceback()
-    end
-    -- return BASE.Debug.traceback()
 end
 
 --- Schedule repeated invocation of a function
@@ -2672,40 +2920,38 @@ function tableFilter( table, func )
     return result, count
 end
 
+--- Return random item from a list that meets a specified criteria
+---@param list table The list to get a random item from 
+---@param criteriaFunc function A function that gets invoked for all items. Function needs to return true if the item is to be picked and returned
+---@return unknown|nil item The randomly selected item, if criteria returns true; otherwise nil
+---@return integer index The index of the randomly selected item if criteria returns true; otherwise zero (0)
 function listRandomItemWhere(list, criteriaFunc)
-    if not isTable(list) then
-        error("listRandomItem :: `list` must be table but was " .. type(list)) end
-
-    if isFunction(criteriaFunc) then
-        list = tableRemoveWhere(listCopy(list, {}), function(i)  return not criteriaFunc(i)  end)
-    end
-    if #list == 0 then
-        return end
-
+    if not isTable(list) then return Error("listRandomItem :: `list` must be table but was " .. type(list)), 0 end
+    if isFunction(criteriaFunc) then list = tableRemoveWhere(listCopy(list, {}), function(i)  return not criteriaFunc(i)  end) end
+    if #list == 0 then return nil, 0 end
     local index = math.random(#list)
     local item = list[index]
     return item, index
 end
 
+--- Returns a random item from a list, along with its index
+---@param list table The list to get a random item from 
+---@param ignoreFunctions any (optional) [default = true] When set, items of type 'function' will not be selected/returned
+---@param nisse any
+---@return unknown|nil item The randomly selected item, if criteria returns true; otherwise nil
+---@return integer index The index of the randomly selected item if criteria returns true; otherwise zero (0)
 function listRandomItem(list, ignoreFunctions, nisse)
--- if nisse then
---     Debug("nisse - listRandomItem :: list: " .. DumpPretty(list))
--- end
-    if not isList(list) then
-        error("listRandomItem :: `list` must be list but was " .. type(list)) end
-
-    if not isBoolean(ignoreFunctions) then
-        ignoreFunctions = true
-    end
+if nisse then
+    Debug("nisse - listRandomItem :: list: " .. DumpPretty(list))
+end
+    if not isList(list) then return Error("listRandomItem :: `list` must be list but was " .. type(list)), 0 end
+    if not isBoolean(ignoreFunctions) then ignoreFunctions = true end
     if ignoreFunctions then
-        return listRandomItemWhere(list, function(i)  return not isFunction(i)  end)
+        local item, index = listRandomItemWhere(list, function(i) return not isFunction(i) end)
+        return item, index
     end
-    if #list == 0 then
-        return end
-
-    if #list == 1 then
-        return list[1], 1
-    end    
+    if #list == 0 then return nil, 0 end
+    if #list == 1 then return list[1], 1 end
     local index = math.random(#list)
     local item = list[index]
 if nisse then
@@ -2851,8 +3097,10 @@ end
 function activateStaggered(source, interval, onActivatedFunc, delay, order)
     Debug("activateStaggered :: source: " .. DumpPretty(source) .. " :: interval: " .. DumpPretty(interval) .. " :: onActivatedFunc: " .. DumpPretty(onActivatedFunc) .. " :: delay: " .. DumpPretty(delay) .. " :: order: " .. DumpPretty(order))
     if isClass(source, SET_BASE) then
+Debug("nisse - activateStaggered :: source is SET_BASE...")
         local table = {}
         if isClass(source, SET_GROUP) then
+Debug("nisse - activateStaggered :: source is SET_GROUP...")
             source:ForEachGroup(function(group) table[#table+1] = group end)
         elseif isClass(source, SET_STATIC) then
             source:ForEachStatic(function(static) table[#table+1] = static end)
@@ -2901,7 +3149,7 @@ function activateStaggered(source, interval, onActivatedFunc, delay, order)
             Debug("activateStaggered :: group " .. group.GroupName .. " was activated")
         end
     end, interval, delay)
-    return sourceactivatedGroups
+    return activatedGroups
 end
 
 function VariableValue:New(value, variance)
@@ -3909,8 +4157,7 @@ function DCAF.Location:NewRaw(name, source, coordinate, coalition)
 end
 
 function DCAF.Location:NewNamed(name, source, coalition, throwOnFail, debug)
-    if source == nil then
-        error("DCAF.Location:New :: `source` cannot be unassigned") end
+    if source == nil then return Error("DCAF.Location:New :: `source` cannot be unassigned") end
 
     if debug then Debug("DCAF.Location:NewNamed :: source: " .. DumpPretty(source)) end
 
@@ -3994,11 +4241,10 @@ function DCAF.Location:NewNamed(name, source, coalition, throwOnFail, debug)
         local static = getStatic(source)
         if static then return DCAF.Location:New(static) end
 
-        if throwOnFail then
+        if throwOnFail then return
             error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
         else
-            Error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source))
-            return location
+            return Error("DCAF.Location:New :: `source` is unexpected value: " .. DumpPretty(source), location)
         end
     end
 end
@@ -4021,7 +4267,13 @@ function DCAF.Location:New(source, coalition, throwOnFail, debug)
     return DCAF.Location:NewNamed(nil, source, coalition, throwOnFail, debug)
 end
 
+--- Resolves a DCAF.Location from a source (eg. group, unit, static, airbase, coordinate, etc.)
+---@param source any Anything that can be resolved as a location
+---@param coalition any (optional) Specifies location coalition
+---@param debug any (optional) Provides debug information in log when set
+---@return any location A DCAF.Location object if source could be resolved as a location; otherwise nil
 function DCAF.Location.Resolve(source, coalition, debug)
+    if source == nil then return Error("DCAF.Location.Resolve :: `source` cannt be nil") end
     if isClass(source, DCAF.Location.ClassName) then return source end
     local d = DCAF.Location:New(source, coalition, false, debug)
     if d then return d end
@@ -4057,6 +4309,20 @@ end
 
 function DCAF.Location:GetLandHeight()
     return self:GetCoordinate():GetLandHeight()
+end
+
+--- Returns the cardinal direction from this location to another
+---@param toLocation table The location to get cardinal direction to
+---@return string cardinalDirection See #CardinalDirection enum
+function DCAF.Location:GetCardinalDirection(toLocation)
+    local validLocation = DCAF.Location.Resolve(toLocation)
+    if not validLocation then return Error("DCAF.Location:GetCardinalDirection :: `toLocation` is not a valid location: "..DumpPretty(toLocation)) end
+    local coordFrom = self:GetCoordinate()
+    if not coordFrom then return Error("DCAF.Location:GetCardinalDirection :: cannot obtain own coordinate") end
+    local coordTo = validLocation:GetCoordinate()
+    if not coordTo then return Error("DCAF.Location:GetCardinalDirection :: cannot obtain coordinate to location") end
+    local hdg = coordFrom:HeadingTo(coordTo)
+    return CardinalDirection.FromHeading(hdg)
 end
 
 function DCAF.Location:CircleToAll(radius, coalition, color, alpha, fillColor, fillAlpha, lineType, readOnly, text)
@@ -4204,6 +4470,20 @@ function DCAF.Location:OffsetAltitude(value)
     return self
 end
 
+function DCAF.Location:GetVec2()
+    -- this is mainly just so we can separate from MOOSE in the future
+    local coord = self:GetCoordinate()
+    if not coord then return end
+    return coord:GetVec2()
+end
+
+function DCAF.Location:GetVec3()
+    -- this is mainly just so we can separate from MOOSE in the future
+    local coord = self:GetCoordinate()
+    if not coord then return end
+    return coord:GetVec3()
+end
+
 function DCAF.Location:GetCoordinate(enforceAltitude, asl)
     if self._funcGetCoordinate then
         return self._funcGetCoordinate(self)
@@ -4258,6 +4538,17 @@ function DCAF.Location:GetAGL()
     end
 
     return self.Coordinate.y - self.Coordinate:GetLandHeight()
+end
+
+function DCAF.Location:GetASL()
+Debug("DCAF.Location:GetASL (---)")
+    if isUnit(self.Source) or isGroup(self.Source) then
+Debug("DCAF.Location:GetASL (aaa)")
+        return self.Source:GetAltitude(false)
+    end
+
+Debug("DCAF.Location:GetASL (bbb) :: Coordinate: "..Dump(self.Coordinate))
+    return self.Coordinate.y
 end
 
 --- Examines a 'location' and returns a value to indicate it is airborne
@@ -5281,10 +5572,17 @@ local function SendMessageToClient( recipient )
     Warning("MessageTo-"..recipient.." :: Recipient not found")
 end
 
-function SetFlag( name, value, menuKey )
+function SetFlag( name, value, delay )
+    Debug("SetFlag :: "..name.." :: " .. DumpPretty(value))
+    if not isAssignedString(name) then return Error("SetFlag :: `name` must be assigned string, but was: "..DumpPretty(name)) end
     value = value or true
-    trigger.action.setUserFlag(name, value)
-    Trace("SetFlag :: "..name.." :: " .. DumpPretty(value))
+    if isNumber(delay) then
+        DCAF.delay(function()
+            trigger.action.setUserFlag(name, value)
+        end, delay)    
+    else
+        trigger.action.setUserFlag(name, value)
+    end
 end
 
 function GetFlag( name )
@@ -5545,6 +5843,9 @@ function GetRelativeDirection(heading, bearing)
 end
 
 --- Returns an object with three values to describe the relative position between two locations
+--- @param source any An object that can be resolved as a #DCAL.Location
+--- @param target any An object that can be resolved as a #DCAL.Location
+--- @return table relativePosition Table: { Direction = <relative direction>, SlantRange = <meters>, VerticalDiff = <meters> }
 function GetRelativePosition(source, target)
     local sourceLocation = DCAF.Location.Resolve(source)
     local targetLocation = DCAF.Location.Resolve(target)
@@ -5555,7 +5856,7 @@ function GetRelativePosition(source, target)
 
     local heading = sourceLocation:GetHeading()
     local bearing, slantRange = GetBearingAndSlantRange(source, target)
-    if not bearing then return end
+    if not bearing then return nil end
     local rd = GetRelativeDirection(heading, bearing)
     local sourceCoordinate = sourceLocation:GetCoordinate()
     local targetCoordinate = targetLocation:GetCoordinate()
@@ -6490,11 +6791,11 @@ end
 
 --- Makes a group appear to attack but weapons are immediately neutralized, emulating provocation or signalling "final warning" etc.
 --- @param group any - #GROUP, or name of #GROUP
---- @param maxShots number - (optional) [default = 1] specifies max number of feined attacks. A value > 10 specifies time (seconds) before group ALARM state is set to green
+--- @param maxShots any - (optional) [default = 1] specifies max number of feined attacks. A value > 10 specifies time (seconds) before group ALARM state is set to green
 --- @param shootAllowance any - (optional) if null; no shot will be allowed (group will only lock). If number then shot weapon is elimitaed after as many seconds. If boolean allowShot = 1 second
---- @param maxTime number - (optional) specifies maximum time for the feined attack. Oncec it times out it will end (see `funcDone`)
---- @param funcDone function - (optional) function to be called back when all feint attacks are complete
---- @param funcEvent function - (optional) function to be called back for each feint attack (see max)
+--- @param maxTime any - (optional) specifies maximum time for the feined attack. Oncec it times out it will end (see `funcDone`)
+--- @param funcDone any - (optional) function to be called back when all feint attacks are complete
+--- @param funcEvent any - (optional) function to be called back for each feint attack (see max)
 function FeintAttack(group, maxShots, shootAllowance, maxTime, funcDone, funcEvent)
     Debug("FeintAttack :: maxShots: " .. Dump(maxShots) .. " :: shootAllowance: " .. Dump(shootAllowance) .. " :: maxTime: " .. Dump(maxTime) .. " :: funcDone: " .. Dump(funcDone) .. " :: funcEvent: " .. Dump(funcEvent))
     local validGroup = getGroup(group)
@@ -7733,26 +8034,6 @@ Debug("ChangeSpeed :: sets speed: " .. Dump(speedMPS))
     return controllable
 end
 
-function getGroupClosestUnit(group, location)
-    local loc = DCAF.Location.Resolve(location)
-    if not loc then
-        error("GROUP:GetClosestUnit :: cannot resolve #DCAF.Location from: " .. DumpPretty(location)) end
-
-    local coord = loc:GetCoordinate()
-    local minDistance = 65535
-    local closestUnit
-    for _, unit in ipairs(self:GetUnits()) do
-        local coordUnit = unit:GetCoordinate()
-        if coordUnit then
-            local distance = coord:Get2DDistance(coordUnit)
-            if distance < minDistance then
-                minDistance = distance
-                closestUnit = unit
-            end
-        end
-    end
-    return closestUnit
-end
 
 --- Gets the unit that is closest to a specified coordinate
 function GROUP:GetClosestUnit(location)
@@ -13579,6 +13860,7 @@ local function trackWeapons()
                 wpnTrack:End()
             end
         elseif not wpnTrack._isEnded then
+Debug("nisse - trackWeapons() :: we have impact")
             -- we have impact...
             local ip = land.getIP(wpnTrack.Point, wpnTrack.Direction, lookahead(wpnTrack.Velocity))  -- terrain intersection point with weapon's nose.  Only search out 20 meters though.
             local impactPoint
@@ -13605,8 +13887,9 @@ local function startScheduler()
 end
 
 local function stopScheduler()
+Debug("nisse - stopScheduler()")
     if DCAF_TrackWeaponsScheduleID then
-        DCAF.stopScheduler(DCAF_TrackWeaponsScheduleID)
+        pcall(function() DCAF.stopScheduler(DCAF_TrackWeaponsScheduleID) end)
         DCAF_TrackWeaponsScheduleID = nil
     end
 end
@@ -13794,9 +14077,11 @@ function DCAF.WpnTracker:OnImpact(wpnTrack)
 end
 
 function DCAF.WpnTracker:End()
+Debug("nisse - DCAF.WpnTracker:End")
     self.IsRunning = false
     local countTrackers = removeWpnTracker(self.Name)
     if countTrackers == 0 then
+Debug("nisse - DCAF.WpnTracker:End :: stops tracking weapons")
         -- no trackers remaining - stop tracking weapons
         MissionEvents:EndOnWeaponFired(newWpnTrack)
         stopScheduler()
@@ -13804,8 +14089,9 @@ function DCAF.WpnTracker:End()
 end
 
 function DCAF.WpnTracking:Start(tracker)
+Debug("nisse - DCAF.WpnTracking:Start :: tracker: "..DumpPretty(tracker).." :: DCAF_TrackWeaponsScheduleID: "..Dump(DCAF_TrackWeaponsScheduleID))
     if not isClass(tracker, DCAF.WpnTracker.ClassName) then
-        error("DCAF.WeaponTracking:Start :: `tracker` must be #" .. DCAF.WpnTracker.ClassName .. ", but was: " .. DumpPretty(tracker)) end
+        return Error("DCAF.WeaponTracking:Start :: `tracker` must be #" .. DCAF.WpnTracker.ClassName .. ", but was: " .. DumpPretty(tracker)) end
 
     local isRunning = DCAF_TrackWeaponsScheduleID ~= nil
     local restart
@@ -13814,10 +14100,10 @@ function DCAF.WpnTracking:Start(tracker)
         restart = true
     end
     if not isRunning then
+Debug("nisse - DCAF.WpnTracking:Start :: registers OnWeaponFired event handler")
         MissionEvents:OnWeaponFired(newWpnTrack)
     end
-    if not restart then
-        return end
+    if not restart then return end
 
     stopScheduler()
     if DCAF_WpnTracksCount > 0 then

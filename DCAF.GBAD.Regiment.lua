@@ -418,7 +418,7 @@ function GBAD_REGIMENT_GROUP_INFO:ScanAirborneUnits(range, coalition, breakOnFir
 end
 
 local function gbadRegiment_unitWasHit(unit, damage, time, isPreDestroyed)
-Debug("nisse - gbadRegiment_unitWasHit :: unit: " .. DumpPretty(unit))
+-- Debug("nisse - gbadRegiment_unitWasHit :: unit: " .. DumpPretty(unit))
     damage = damage or unit:GetDamageRelative()
     time = time or UTILS.SecondsOfToday()
     if damage == 0 then
@@ -2255,7 +2255,7 @@ function DCAF.GBAD.Regiment:Start()
         return self
     end
     Debug(DCAF.GBAD.Regiment.ClassName .. ":Start :: " .. self.Name .. "...")
-    local iads = MANTIS:New(self.Name, "n/a", self.EWRPrefix, self.HQ.GroupName, self.Coalition, false, self.AWACS)
+    local iads = MANTIS:New(self.Name, "n/a", self.EWRPrefix, self.HQ.GroupName, self.Coalition, true, self.AWACS)
     hackMantisIADS(self, iads)
     local set_zone = SET_ZONE:New()
     for _, zone in ipairs(self.Zones) do

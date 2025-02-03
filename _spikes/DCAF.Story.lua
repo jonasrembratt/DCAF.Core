@@ -87,8 +87,8 @@ local nisse_debug_menu
 function GM_Menu:AddMenu(text)
     Debug("GM_Menu:AddMenu :: " .. text)
 if text == "Select Flight" then
-    Debug("nisse - select flight menu (xxx) :: self._parent: "..DumpPretty(self._parent).." self._parent._menu: "..DumpPrettyDeep(self._parent._menu, 2))
-    if self._parent._menu == nisse_debug_menu then Error("WTF?! (aaa)") end
+Debug("nisse - select flight menu (xxx) :: self._parent: "..DumpPretty(self._parent).." self._parent._menu: "..DumpPrettyDeep(self._parent._menu, 2))
+if self._parent._menu == nisse_debug_menu then Error("WTF?! (aaa)") end
 end
     
     if self == GM_Menu then
@@ -103,8 +103,8 @@ end
     subMenu._menu = MENU_COALITION:New(Blue, text, self._menu or GM_Menu._root._menu)
 
 if text == "DEBUG" then -- NISSE
-    Debug("nisse - DEBUG menu...")
-    nisse_debug_menu = subMenu._menu
+Debug("nisse - DEBUG menu...")
+nisse_debug_menu = subMenu._menu
 end 
 -- if text == "Select Flight" then
 --     Debug("nisse - select flight menu (bbb)...")
@@ -186,8 +186,6 @@ end
     
 end -- (Game Master menu - GM_Menu)
 
-Debug("nisse - Story (aaa)")
-
 local DCAF_Story_ID = 0
 local DCAF_Stories = {
     -- key   = #string : name of story
@@ -198,7 +196,16 @@ DCAF.Story = {
     ClassName = "DCAF.Story",
     ----
     Name = nil,             -- #string - name of story
-    gm_menu = nil
+    gm_menu = nil,
+    _sounds = {
+        NotificationPlayerMenu = "dcaf-story-notification-menu.wav",
+        NotificationRecon = "dcaf-story-notification-recon.wav",
+    }
+}
+
+DCAF.Story.ControllerTypes = {
+    Human = "Human",
+    Synthetic = "Synthetic",
 }
 
 DCAF.StoryStartOutcome = {
@@ -223,8 +230,12 @@ setmetatable(DCAF.Story, {
     __tostring = function(story) return story.Name end
 })
 
---- Initializes a new, named, story and returns it
-function DCAF.Story:New(name, startDelayDefault)
+---Initializes a new, named, story and returns it
+---@param name any (optional) [default = 'Story #<number>'] name of story
+---@param displayName any (optional) [default = normalized from assume camel-case name] Display name of story (eg. used in 'Start' menu etc.)
+---@param startDelayDefault any (optional) Sets a delay to be applied when story is started
+---@return table|unknown The new story (#DCAF.Story object)
+function DCAF.Story:New(name, displayName, startDelayDefault)
     local story = DCAF.clone(DCAF.Story)
     DCAF_Story_ID = DCAF_Story_ID + 1
     story.ID = DCAF_Story_ID
@@ -239,11 +250,14 @@ function DCAF.Story:New(name, startDelayDefault)
         local existing = DCAF_Stories[name]
         if existing then
             Error("DCAF.Story:New :: a story named '" .. name .. " was already registered")
-            return
+            return nil
         end
         story.Name = name
+        if not isAssignedString(displayName) then displayName = stringCamelToDisplay(name) end
+        story.DisplayName = displayName
     else
         story.Name = "Story #" .. story.ID
+        story.DisplayName = story.Name
     end
     return story
 end
@@ -330,7 +344,10 @@ end
 --- Starts the story. This function will invoke any internal function registered with :OnStart (if any), or it will simply mark the story as started, and then invoke the :OnStarted function
 function DCAF.Story:Start()
     if self:IsRunning() then return end
-    Debug("DCAF.Story:Start :: "..self.Name)
+    if self._menuStart then
+        Debug("DCAF.Story:Start :: "..self.Name.." :: self._menuStart._autoRemove: "..Dump(self._menuStart._autoRemove))
+        if self._menuStart._autoRemove then self._menuStart:Remove(false) end
+    end
     return self:_start()
 end
 
@@ -398,8 +415,9 @@ end
 --- Activates groups
 --- @param source any A table, SET_GROUP, or SET_STATIC to be activated
 --- @param order any (optional) When specified, the `source` will be sorted on a value found in each group. Value can be `true` or a string to specify the name of the index to be used for the activation order
---- @param onActivatedFunc function  (optional) Function to be called back for each activated group. Passes the key and group as arguments
+--- @param onActivatedFunc any  (optional) Function to be called back for each activated group. Passes the key and group as arguments
 --- @param delay number (optional) [default=0] Delays the first activation
+--- @return any activated A single group or a list of groups, depending on type of `source`
 function DCAF.Story:Activate(source, order, onActivatedFunc, delay)
     Debug("DCAF.Story:Activate :: source: " .. DumpPretty(source) .. " :: order: " .. DumpPretty(order) .. " :: delay:" .. DumpPretty(delay))
     if isClass(source, UNIT) then
@@ -407,7 +425,23 @@ function DCAF.Story:Activate(source, order, onActivatedFunc, delay)
     end
     if isClass(source, GROUP) then
         if source:IsActive() then return source end
-        return source:Activate()
+
+        local function activate(delay)
+            local group = source:Activate(delay)
+            if isFunction(onActivatedFunc) then
+                local ok, err = pcall(function() onActivatedFunc(group) end)
+                if not ok then Error(self.Name..":Activate :: error when invoking onActivatedFunc: "..DumpPretty(err)) end
+            end
+            return group
+        end
+        
+        if isNumber(delay) and isFunction(onActivatedFunc) then
+            self:Delay(delay, function() activate() end)
+            return
+        else
+            return activate(delay)
+        end
+
     end
     if isTableOfAssignedStrings(source) or isTableOfClass(source, GROUP) or isTableOfClass(source, STATIC) or isClass(source, SET_GROUP) or isClass(source, SET_STATIC) then
         return self:ActivateStaggered(source, 0, order, onActivatedFunc, delay)
@@ -422,6 +456,53 @@ function DCAF.Story:Activate(source, order, onActivatedFunc, delay)
     return activatedGroups
 end
 
+function DCAF.Story:Destroy(source, delay)
+    Debug("DCAF.Story:Destroy :: source: " .. DumpPretty(source) .. " :: order: " .. DumpPretty(order) .. " :: delay:" .. DumpPretty(delay))
+    if isAssignedString(source) then
+        local item = getUnitOrGroupOrStatic(source)
+        if not item then return Error(self.Name..":Destroy :: `cannot` resolve `source`: "..source) end
+        source = { item }
+    end
+    if isTableOfAssignedStrings(source) then
+        local items = {}
+        for _, value in pairs(source) do
+            items[#items+1] = getUnitOrGroupOrStatic(value)
+        end
+        source = items
+    end
+    if isClass(source, UNIT) then
+        source = source:GetGroup()
+    end
+    local items
+    if isClass(source, GROUP) then
+        items = { source }
+    end
+    if isClass(source, SET_UNIT) then
+        source:ForEachUnit(function(unit)
+            items[#items+1] = unit
+        end)
+    end
+    if isClass(source, SET_GROUP) then
+        source:ForEachGroup(function(group)
+            items[#items+1] = group
+        end)
+    end
+    if isClass(source, SET_STATIC) then
+        source:ForEachStatic(function(static)
+            items[#items+1] = static
+        end)
+    end
+    if not isTable(items) then return Error("DCAF.Story:Destroy :: cannot resolve `source` as anything that can be destroyed: "..DumpPretty(source)) end
+    local function destroyAll()
+        
+    end
+    if isNumber(delay) then
+        DCAF.delay(destroyAll, delay)
+    else
+        destroyAll()
+    end
+end
+
 --- Activates groups in a staggered fashion (applying a delay between each activation)
 --- @param source any A table, SET_GROUP, or SET_STATIC to be activated
 --- @param interval number (optional) [default=5] An interval (seconds) between each activation
@@ -433,25 +514,41 @@ function DCAF.Story:ActivateStaggered(source, interval, order, onActivatedFunc, 
     return activateStaggered(source, interval, onActivatedFunc, delay, order)
 end
 
+--- Invokes a function after a delay
+---@param time number Specifies the delay (in seconds)
+---@param func function The function to be invoked
+function DCAF.Story:Delay(time, func)
+    if not isNumber(time) then return Error(self.Name..":Delay :: `time` must be number (seconds), but was: "..DumpPretty(time)) end
+    if not isFunction(func) then return Error(self.Name..":Delay :: `func` must be function, but was: "..DumpPretty(func)) end
+    DCAF.delay(func, time)
+end
+
+--- Sends text message to assigned flight (group)
+---@param message string The text message to display on screen
+---@param duration any (optional) Specifies for how long (seconds) the message should be displayed
+function DCAF.Story:MessageToAssignedFlight(message, duration)
+    if not self.AssignedFlight then return end
+    if not isAssignedString(message) then return Error("MessageToAssignedFlight :: `message` must be assigned string, but was: "..DumpPretty(message)) end
+    if duration ~= nil and not isNumber(duration) then return Error("MessageToAssignedFlight :: `duration` must be number, but was: "..DumpPretty(duration)) end
+    MessageTo(self.AssignedFlight.Group, message, duration)
+end
+
 --- Returns coordinate for a "reference location" and, optionally, removes the object
 --- @param source string A GROUP or STATIC, ort name of a GROUP/STATIC
 --- @param destroy boolean (optional) [default = true] Specifies whether to remove the object after acquiring its coordinate
 --- @return table The coordinate of the GROUP or STATIC
 function DCAF.Story:GetRefLoc(source, destroy)
     Debug("DCAF.Story:GetRefLoc :: source: " .. DumpPretty(source) .. " :: destroy: " .. DumpPretty(destroy))
-    local function processSource(object)
+    local function process(object)
         local coordinate = object:GetCoordinate()
         if destroy then object:Destroy() end
         return coordinate
     end
 
     if not isBoolean(destroy) then destroy = true end
-    local group = getGroup(source)
-    if group then
-        return processSource(group)
-    end
-    local static = getStatic(source)
-    if static then return processSource(group) end
+    local item = getGroup(source) or getStatic(source)
+Debug("nisse - DCAF.Story:GetRefLoc :: item: "..Dump(item))
+    if item then return process(item) end
     return Error("DCAF.Story:GetRefLoc :: `source` could not be resolved: " .. DumpPretty(source))
 end
 
@@ -789,15 +886,15 @@ end
 
 function DCAF.Story:Send(ttsChannel, message, callSign, isActual, dash, isReplay)
     if not ttsChannel then
-        if self._expectTTSChannelsAssigned then Error("DCAF.Story:Send :: `ttsChannel` was unassigned") end
+        if self._expectTTSChannelsAssigned then Error(self.Name..":Send :: `ttsChannel` was unassigned") end
         return
     end
-    if not isClass(ttsChannel, DCAF.TTSChannel) then return Error("DCAF.Story:Send :: `ttsChannel` must be type #" .. DCAF.TTSChannel.ClassName .. ", but was: " .. DCAF.TTSChannel.ClassName) end
+    if not isClass(ttsChannel, DCAF.TTSChannel) then return Error(self.Name..":Send :: `ttsChannel` must be type #" .. DCAF.TTSChannel.ClassName .. ", but was: "..DumpPretty(ttsChannel)) end
     ttsChannel:Send(message, callSign, isActual, dash, isReplay)
 end
 
 function DCAF.Story:SendDelayed(delay, ttsChannel, message, callSign, isActual, dash, isReplay)
-    if not isNumber(delay) then return Error("DCAF.Story:SendDelayed :: `delay` must be positive number, but was: " .. DumpPretty(delay)) end
+    if not isNumber(delay) then return Error(self.Name..":SendDelayed :: `delay` must be positive number, but was: " .. DumpPretty(delay)) end
     DCAF.delay(function()
         self:Send(ttsChannel, message, callSign, isActual, dash, isReplay)
     end, delay)
@@ -812,8 +909,8 @@ function DCAF.Story:Call(ttsChannel, message, seconds, funcCallback, id)
 end
 
 function DCAF.Story:AssignFlight(flight)
-    Debug("DCAF.Story:AssignFlight :: flight: " .. DumpPretty(flight))
-    if not isClass(flight, DCAF.Flight) then return Error("DCAF.Story:AssignFlight :: `flight` must be "..DCAF.Flight.ClassName..", but was: "..DumpPretty(flight), self) end
+    Debug(self.Name..":AssignFlight :: flight: " .. DumpPretty(flight))
+    if not isClass(flight, DCAF.Flight) then return Error(self.Name..":AssignFlight :: `flight` must be "..DCAF.Flight.ClassName..", but was: "..DumpPretty(flight), self) end
     self.AssignedFlight = flight
     self:OnAssignedFlight(flight)
 end
@@ -839,15 +936,57 @@ function DCAF.Story:GetAssignedUnits()
 end
 
 function DCAF.Story:OnAssignedFlight(flight)
-    Debug("DCAF.Story:OnAssignedFlight :: (not overridden; no action)")
+    Debug(self.Name..":OnAssignedFlight :: (not overridden; no action)")
 end
 
 function DCAF.Story:Get2DDistance(locationA, locationB)
     local validLocationA = DCAF.Location.Resolve(locationA)
-    if not validLocationA then return Error("DCAF.Story:Get2DDistance :: `locationA` is not a valid #"..DCAF.Location.ClassName..": "..DumpPretty(locationA)) end
+    if not validLocationA then return Error(self.Name..":Get2DDistance :: `locationA` is not a valid #"..DCAF.Location.ClassName..": "..DumpPretty(locationA)) end
     local validLocationB = DCAF.Location.Resolve(locationB)
-    if not validLocationB then return Error("DCAF.Story:Get2DDistance :: `locationB` is not a valid #"..DCAF.Location.ClassName..": "..DumpPretty(locationB)) end
+    if not validLocationB then return Error(self.Name..":Get2DDistance :: `locationB` is not a valid #"..DCAF.Location.ClassName..": "..DumpPretty(locationB)) end
     return validLocationA:Get2DDistance(validLocationB)
+end
+
+--- Returns the cardinal direction from this location to another
+---@param locationFrom table The location to get cardinal direction from
+---@param locationTo table The location to get cardinal direction to
+---@return string cardinalDirection See "CardinalDirection enum
+function DCAF.Story:GetCardinalDirection(locationFrom, locationTo)
+    local validLocationFrom = DCAF.Location.Resolve(locationFrom)
+    if not validLocationFrom then return Error(self.Name..":GetCardinalDirection :: `locationA` is not a valid location: "..DumpPretty(locationFrom)) end
+    return  validLocationFrom:GetCardinalDirection(locationTo)
+end
+
+--- Substitutes all occurrences of an identifier in a messages with a specified string
+---@param message string The textual message, containing one or more '[DISTANCE]' identifiers
+---@param pattern string A custom pattern to be replaced with value. Please note that the identifier should have been escaped before use (see escapePattern)
+---@param value any The value to be used
+---@return string any The finished message, with all DISTANCE identifiers replaced with the phonetic representation of distance. If message is unassigned then the message is returned as-is
+function DCAF.Story:SubstMessage(message, pattern, value)
+Debug("nisse - DCAF.Story:SubstMessage :: pattern: "..Dump(pattern).." :: message: "..Dump(message))
+    if not isAssignedString(message) then return message end
+    if not isAssignedString(pattern) then return Error(self.Name..":SubstMessage :: `pattern` must be assigned (and escaped) string, but was: "..DumpPretty(pattern)) end
+    if value == nil then return message end
+    local newMessage = string.gsub(message, pattern, tostring(value))
+    return newMessage
+end
+
+--- Substitutes all '[DISTANCE]' identifiers in a message with a phonetic representation of a distance 
+---@param message string The textual message, containing one or more '[DISTANCE]' identifiers
+---@param distance number The numeric distance to be used
+---@param identifier any (optional) [default = '[DISTANCE]'] A custom identifier to be used when the default ('[DISTANCE]') is inconvenient. Please note that the identifier should have been escaped before use (see escapePattern)
+---@return string any The finished message, with all DISTANCE identifiers replaced with the phonetic representation of distance. If message is unassigned then the message is returned as-is
+function DCAF.Story:SubstMessageDistance(message, distance, identifier)
+    if not isAssignedString(message) then return message end
+    if isFunction(distance) then distance = distance() end
+    if not isNumber(distance) then return Error(self.Name..":SubstituteMessageDistance :: distance must be number, but was: "..DumpPretty(distance)) end
+    if not isAssignedString(identifier) then
+        identifier = "%[DISTANCE%]"
+    else
+        identifier = escapePattern(identifier)
+    end
+    local newMessage = string.gsub(message, identifier, PhoneticAlphabet:ConvertNumber(distance))
+    return newMessage
 end
 
 --- Specifies two locations and registers a handler function to be invoked once those locations are inside a specified range
@@ -860,23 +999,20 @@ end
 ---@param funcExit any (optional) Handler function to be called back once locations are outside of `exitRange`
 ---@return self any self
 function DCAF.Story:WhenIn2DRange(range, locationA, locationB, funcInRange, exitRange, interval, funcExit)
-    if not isNumber(range) or range < 1 then return Error("DCAF.Story:WhenIn2DRange :: `range` must be positive number, but was: " .. DumpPretty(range), self) end
-    if not isFunction(funcInRange) then return Error("DCAF.Story:WhenIn2DRange :: `funcInRange` must be function, but was: " .. DumpPretty(funcInRange), self) end
-    if funcExit and not isFunction(funcExit) then return Error("DCAF.Story:WhenIn2DRange :: `funcExit` must be function, but was: " .. DumpPretty(funcExit)) end
+    if not isNumber(range) or range < 1 then return Error(self.Name..":WhenIn2DRange :: `range` must be positive number, but was: " .. DumpPretty(range), self) end
+    if not isFunction(funcInRange) then return Error(self.Name..":WhenIn2DRange :: `funcInRange` must be function, but was: " .. DumpPretty(funcInRange), self) end
+    if funcExit and not isFunction(funcExit) then return Error(self.Name..":WhenIn2DRange :: `funcExit` must be function, but was: " .. DumpPretty(funcExit)) end
     local validLocationA = DCAF.Location.Resolve(locationA)
-    if not validLocationA then return Error("DCAF.Story:WhenIn2DRange :: could not resolve `locationA`: " .. DumpPretty(locationA), self) end
-Debug("nisse - DCAF.Story:WhenIn2DRange (eee) :: locationB: "..DumpPretty(locationB))
+    if not validLocationA then return Error(self.Name..":WhenIn2DRange :: could not resolve `locationA`: " .. DumpPretty(locationA), self) end
     local validLocationB = DCAF.Location.Resolve(locationB)
-Debug("nisse - DCAF.Story:WhenIn2DRange (fff)")
-    if not validLocationB then return Error("DCAF.Story:WhenIn2DRange :: could not resolve `locationB`: " .. DumpPretty(locationB), self) end
-Debug("nisse - DCAF.Story:WhenIn2DRange (ggg)")
+    if not validLocationB then return Error(self.Name..":WhenIn2DRange :: could not resolve `locationB`: " .. DumpPretty(locationB), self) end
     locationA = validLocationA
     locationB = validLocationB
-    Debug("DCAF.Story:WhenIn2DRange :: range: "..range.." :: locationA: "..locationA.Name.." :: locationB: "..locationB.Name.." :: interval: "..DumpPretty(interval))
+    Debug(self.Name..":WhenIn2DRange :: range: "..range.." :: locationA: "..locationA.Name.." :: locationB: "..locationB.Name.." :: interval: "..DumpPretty(interval))
 
-    if isNumber(exitRange) and exitRange <= range then return Error("DCAF.Story:WhenIn2DRange :: `exitRange` must be greater than `range` ("..range.."), but was: "..exitRange) end
+    if isNumber(exitRange) and exitRange <= range then return Error(self.Name..":WhenIn2DRange :: `exitRange` must be greater than `range` ("..range.."), but was: "..exitRange) end
     if not isNumber(interval) or interval < 1 then interval = 1 end
-    if funcExit and not isFunction(funcExit) then return Error("DCAF.Story:WhenIn2DRange :: `handlerExit` must be function, but was: " .. DumpPretty(funcExit)) end
+    if funcExit and not isFunction(funcExit) then return Error(self.Name..":WhenIn2DRange :: `handlerExit` must be function, but was: " .. DumpPretty(funcExit)) end
     locationA:WhenIn2DRange(range, locationB, funcInRange, exitRange, interval, funcExit)
     return self
 end
@@ -904,7 +1040,7 @@ function DCAF.Story:Debug(value)
 end
 
 function DCAF.Story:OnDebug(value)
-Debug("nisse - DCAF.Story:OnDebug :: value: "..Dump(value))
+Debug("nisse - "..self.Name..":OnDebug :: value: "..Dump(value))
     -- to be overridden
     return value
 end
@@ -921,28 +1057,21 @@ function DCAF.Story:DebugMessage(message, duration)
 end
 
 if DCAF.PlayerReconTask then
-function DCAF.Story:EnableReconLocationWithMapMarker(location, distanceTolerance, funcSuccess)
+function DCAF.Story:EnableFlightMarkerRecon(location, distanceTolerance, funcSuccess)
     local me = self.Name
-    Debug(me..":EnableReconLocationWithMapMarker :: location: "..DumpPretty(location).." :: distanceTolerance: " .. DumpPretty(distanceTolerance).." :: funcSuccess: "..DumpPretty(funcSuccess))
-    if not isFunction(funcSuccess) then return Error(me..":EnableReconLocationWithMapMarker :: no Flight has been assigned") end
-    if not self.AssignedFlight then return Error(me..":EnableReconLocationWithMapMarker :: no Flight has been assigned") end
+    Debug(me..":EnableFlightMarkerRecon :: location: "..DumpPretty(location).." :: distanceTolerance: " .. DumpPretty(distanceTolerance).." :: funcSuccess: "..DumpPretty(funcSuccess))
+    if not isFunction(funcSuccess) then return Error(me..":EnableFlightMarkerRecon :: no Flight has been assigned") end
+    if not self.AssignedFlight then return Error(me..":EnableFlightMarkerRecon :: no Flight has been assigned") end
     local validLocation = DCAF.Location.Resolve(location)
-    if not validLocation then return Error(me..":EnableReconLocationWithMapMarker :: cannot resolve location: "..DumpPretty(location)) end
+    if not validLocation then return Error(me..":EnableFlightMarkerRecon :: cannot resolve location: "..DumpPretty(location)) end
     location = validLocation
-
-    local function isNear(coord)
-        local coordLocation = location:GetCoordinate()
-        if not coordLocation then return Error(me..":EnableReconLocationWithMapMarker :: cannot get coordinate for location") end
-        local distance = coord:Get2DDistance(coordLocation)
-        Debug(me..":EnableReconLocationWithMapMarker :: distance: " .. UTILS.MetersToNM(distance).." nm".." :: distanceTolerance: "..UTILS.MetersToNM(distanceTolerance).." nm")
-        return distance < distanceTolerance
+    if self._sounds and self._sounds.NotificationRecon then
+        MessageTo(self.AssignedFlight.Group, self._sounds.NotificationRecon)
     end
 
-    return DCAF.PlayerReconTask:New(self.AssignedFlight.Group, location.Name):HandleMapMarker(function(task, event)
-        if isNear(event.MarkCoordinate) then
-            local ok, err = pcall(function() funcSuccess(task, event) end)
-            if not ok then Error("DCAF.Story:EnableReconLocationWithMapMarker :: "..DumpPretty(err)) end
-        end
+    return DCAF.PlayerReconTask:New(self.AssignedFlight.Group, location.Name):RequireProximity(location, distanceTolerance):HandleMapMarker(function(task, event)
+        local ok, err = pcall(function() funcSuccess(task, event) end)
+        if not ok then Error("DCAF.Story:EnableFlightMarkerRecon :: "..DumpPretty(err)) end
     end)
 end
 end
@@ -951,19 +1080,18 @@ end
 do -- |||||||||||||||||||||||||||    Track which Functions has been Called so far    |||||||||||||||||||||||||||
 
 --- Returns the in-game time a function was called, or nil if function hasn't been run
----@param name any (optional) [default = name of calling function] Name of function
 ---@return any timeFunctionWasInvoked Returns nil if function has not been invoked
-function DCAF.Story:IsFunctionDone(name)
-    local add
-    if not isAssignedString(name) then
-        add = true
-        local info = debug.getinfo(2, "n")
-        if not info.name then
+function DCAF.Story:IsFunctionDone(key, add)
+    if self:IsEnded() then return true end
+    if not isBoolean(add) then add = true end
+    add = true
+    local info = debug.getinfo(2, "n")
+    if not info.name then
 Debug("nisse - DCAF.Story:IsFunctionDone :: WTF?!")
-            return nil
-        end
-        name = info.name
+        return nil
     end
+    local name = info.name
+    if isAssignedString(key) then name = name.."/"..key end
     self._functionFlow = self._functionFlow or {}
     self._functionFlowNextOrder = self._functionFlowNextOrder or 0
     local info = self._functionFlow[name]
@@ -983,7 +1111,7 @@ Debug("nisse - DCAF.Story:IsFunctionDone :: WTF?!")
 end
 
 function DCAF.Story:GetFunctionDone(order)
-    if not isNumber(order) then return Error("DCAF.Story:GetFunctionDone :: `order` must be number, but was: "..DumpPretty(order)) end
+    if not isNumber(order) then return Error(self.Name..":GetFunctionDone :: `order` must be number, but was: "..DumpPretty(order)) end
     if not self._functionFlow then return end
     for index, info in ipairs(self._functionFlow) do
         if info.Order == order then return info end
@@ -1014,8 +1142,8 @@ function DCAF.Story:_getGameMasterMenu()
 end
 
 function DCAF.Story:AddMenu(name)
-    Debug("DCAF.Story:AddMenu :: name: " .. DumpPretty(name))
-    name = name or self.Name
+    Debug(self.Name..":AddMenu :: name: " .. DumpPretty(name))
+    name = name or self.DisplayName
     self._menu = self:_getGameMasterMenu():New(name)
     return self._menu
 end
@@ -1026,22 +1154,30 @@ function DCAF.Story:GetMenu()
 end
 
 function DCAF.Story:AddCommand(text, func)
-    Debug("DCAF.Story:AddCommand :: text: " .. DumpPretty(text))
+    Debug(self.Name..":AddCommand :: text: " .. DumpPretty(text))
     self:GetMenu():NewCommand(text, func)
 end
 
-function DCAF.Story:AddStartMenu(text)
-    return self:GetMenu():NewCommand(text or "Start", function(menu)
+--- Adds a Game Master menu to start story manually
+---@param text any (optional) [default = 'Start'] Text to be used for menu
+---@param autoRemove any (optional) [default = true] When set, the start menu will be automatically removed when story starts
+---@return unknown self 
+function DCAF.Story:AddStartMenu(text, autoRemove)
+    Debug(self.Name..":AddStartMenu :: text: "..DumpPretty(text).." :: autoRemove: "..DumpPretty(autoRemove))
+    if not isAssignedString(text) then text = "Start" end
+    if not isBoolean(autoRemove) then autoRemove = true end
+    self._menuStart = self:GetMenu():NewCommand(text or "Start", function()
         self:Start()
-        menu:Remove(false)
     end)
+    self._menuStart._autoRemove = autoRemove
+    return self
 end
 
 function DCAF.Story:AddDebugCommand(text, func)
     Debug(self.Name..":AddDebugCommand :: text: "..Dump(text).." :: func: "..Dump(func))
     if not self:IsDebug() then return end
-    if not isAssignedString(text) then return Error("DCAF.Story:AddDebugCommand :: `text` must be assigned string, but was: "..DumpPretty(text)) end
-    if not isFunction(func) then return Error("DCAF.Story:AddDebugCommand :: `func` must be function, but was: "..DumpPretty(func)) end
+    if not isAssignedString(text) then return Error(self.Name..":AddDebugCommand :: `text` must be assigned string, but was: "..DumpPretty(text)) end
+    if not isFunction(func) then return Error(self.Name..":AddDebugCommand :: `func` must be function, but was: "..DumpPretty(func)) end
     local storyMenu = self:GetMenu()
     if not self._menu.debugMenu then
         self._menu.debugMenu = storyMenu:New("DEBUG")
@@ -1067,13 +1203,66 @@ function DCAF.Story:AddFlightCommand(text, func, soundFile)
     Debug(self.Name..":AddFlightCommand :: text: "..Dump(text))
     if not self.AssignedFlight then return Error(self.Name..":AddFlightCommand :: no flight was assigned") end
     if not isAssignedString(soundFile) then soundFile = self._flightMenuSoundFile end
-    if isAssignedString(soundFile) then MessageTo(self.AssignedFlight.Group, soundFile) end
+    if isAssignedString(soundFile) then
+        self:Delay(10, function() MessageTo(self.AssignedFlight.Group, soundFile) end) -- the sound should not play immediately
+    elseif self._sounds then
+        self:Delay(10, function() MessageTo(self.AssignedFlight.Group, self._sounds.NotificationPlayerMenu) end) -- the sound should not play immediately
+    end
     return DCAF.Menu:NewCommand(text, func, self.AssignedFlight.Group)
 end
 
+function DCAF.Story:AddFlightCommand_AdviseGZD()
+    if not self.AssignedFlight or self.AssignedFlight.Group._menuAdviseGZD then return self end
+    local group = self.AssignedFlight.Group
+    local location = self.TTS_Controller and self.TTS_Controller.Location or DCAF.Location.Resolve(group)
+
+    self.AssignedFlight.Group._menuAdviseGZD = self:AddFlightCommand("Advise GZD", function()
+        local coord = location:GetCoordinate()
+        if not coord then
+            self:SendSyntheticController("Unable to advice Grid Zone Designator at this time")
+            Debug("DCAF.Story:AddFlightCommand_RequestLocation :: cannot resolve GZD :: failed to obtain coordinate for location: "..Dump(location.Name))
+        end
+        local mgrs = coord:ToMGRS()
+        if self:IsSyntheticController() and self.AssignedFlight then
+            local message = "[FLIGHT]. Be advised. Grid Zone Designator is p["..mgrs.Map.."]"
+            self:SendSyntheticController(message)
+        else
+            local message = "Grid Zone Designator is "..mgrs.Map
+            MessageTo(group, message)
+        end
+    end)
+end
+
+function DCAF.Story:AddFlightCommand_RequestLocation(targetDesignation, location, prefixMGRS, prefixLLDM)
+    if not self:IsSyntheticController() then return end
+    local validLocation = DCAF.Location.Resolve(location)
+    if not validLocation then return Error(self.Name..":AddFlightCommand_RequestLocation :: cannot resolve location") end
+    location = validLocation
+    if not self._menuRequestLocation then
+        self:AddFlightCommand_AdviseGZD()
+        self._menuRequestLocation = self:AddFlightMenu("Request location for")
+    end
+
+    local menu = self._menuRequestLocation:GetChild(targetDesignation)
+    if menu then return menu end
+    menu = self._menuRequestLocation:New(targetDesignation)
+    menu:NewCommand("...use MGRS", function()
+        if not isAssignedString(prefixMGRS) then prefixMGRS = "Grid as follow. " end
+        local message = prefixMGRS..PhoneticAlphabet:ConvertMGRS(location, true)
+        self:SendSyntheticController(message)
+    end)
+    menu:NewCommand("...use Decimals", function()
+        if not isAssignedString(prefixLLDM) then prefixLLDM = "Decimals as follow. " end
+        local message = prefixLLDM..PhoneticAlphabet:ConvertLLDM(location, true, true)
+        self:SendSyntheticController(message)
+    end)
+    return menu
+end
+
+
 do -- ||||||||||||||||||||||    Using a Synthetic Controller    ||||||||||||||||||||||
 function DCAF.Story:InitSyntheticController(ttsChannel)
-    Debug("DCAF.Story:InitSyntheticController :: "..self.Name.." :: ttsChannel: " .. Dump(ttsChannel))
+    Debug(self.Name..":InitSyntheticController :: "..self.Name.." :: ttsChannel: " .. Dump(ttsChannel))
     if ttsChannel == false then
         self.TTS_Controller = nil
     else
@@ -1087,7 +1276,14 @@ function DCAF.Story:InitSyntheticController(ttsChannel)
     elseif not self._isAssignFlightAlwaysEnabled then
         self:DisableAssignFlight()
     end
+    local controllerType = self:IsSyntheticController() and DCAF.Story.ControllerTypes.Synthetic or DCAF.Story.ControllerTypes.Human
+    local ok, err = pcall(function() self:OnSetController(controllerType) end)
+    if not ok then Error("DCAF.Story:InitSyntheticController :: error when invoking DCAF.Story:OnSetController :: err: "..DumpPretty(err)) end
     return self
+end
+
+function DCAF.Story:OnSetController(type)
+    -- to be overridden
 end
 
 function DCAF.Story:IsSyntheticController()
@@ -1095,7 +1291,7 @@ function DCAF.Story:IsSyntheticController()
 end
 
 function DCAF.Story:SendSyntheticController(message, delay)
-    if not self:IsSyntheticController() then return Error("DCAF.Story:SendSyntheticController :: synthetic controller is not enabled") end
+    if not self:IsSyntheticController() then return Error(self.Name..":SendSyntheticController :: synthetic controller is not enabled") end
     if isNumber(delay) and delay > 0 then 
         return self:SendDelayed(delay, self.TTS_Controller, message)
     else
@@ -1104,8 +1300,8 @@ function DCAF.Story:SendSyntheticController(message, delay)
 end
 
 function DCAF.Story:EnableSyntheticController(ttsChannel, preSelect, allowReSelect, textHumanController, textSyntheticController, confirmChoice)
-    Debug("DCAF.Story:EnableSyntheticController :: "..self.Name.." :: ttsChannel: " .. Dump(ttsChannel).." :: preSelect: "..DumpPretty(preSelect).." :: allowReSelect: "..DumpPretty(allowReSelect))
-    if not isClass(ttsChannel, DCAF.TTSChannel) then return Error("DCAF.Story:EnableSyntheticController :: `ttsChannel` must be #"..DCAF.TTSChannel.ClassName..", but was: "..DumpPretty(ttsChannel)) end
+    Debug(self.Name..":EnableSyntheticController :: "..self.Name.." :: ttsChannel: " .. Dump(ttsChannel).." :: preSelect: "..DumpPretty(preSelect).." :: allowReSelect: "..DumpPretty(allowReSelect))
+    if not isClass(ttsChannel, DCAF.TTSChannel) then return Error(self.Name..":EnableSyntheticController :: `ttsChannel` must be #"..DCAF.TTSChannel.ClassName..", but was: "..DumpPretty(ttsChannel)) end
     if not isBoolean(allowReSelect) then allowReSelect = true end
     if not isAssignedString(textHumanController) then textHumanController = "Use Human Controller" end
     if not isAssignedString(textSyntheticController) then textSyntheticController = "Use Synthetic Controller" end
@@ -1331,7 +1527,7 @@ end
 ---@param text any (optional) [default = "Assign Flight"]
 ---@param always any (optional) [default = true] When false, the ability to assign a flight is coupled with the use of a synthetic controller (flight can only be assigned when a synthetic controller is in use)
 function DCAF.Story:EnableAssignFlight(funcOnAssigned, text, always)
-    Debug("DCAF.Story:EnableAssignFlight :: "..self.Name.." :: funcOnSelected: "..DumpPretty(funcOnAssigned).." :: text: "..DumpPretty(text))
+    Debug(self.Name..":EnableAssignFlight :: "..self.Name.." :: funcOnSelected: "..DumpPretty(funcOnAssigned).." :: text: "..DumpPretty(text))
     local assignFlight
     if self._menuAssignFlightPlaceHolder then self._menuAssignFlightPlaceHolder:Remove(false) end
 
@@ -1375,7 +1571,7 @@ end -- (Assigning Flight from GM Menu)
 
 do -- ||||||||||||||||||||||    GBAD - SAM Ambush     ||||||||||||||||||||||
 function DCAF.Story:SetupSamAmbushForTarget(sam, target, options)
-    if not DCAF.GBAD then return Error("DCAF.Story:SetupSamAmbushForTarget :: DCAF.GBAD is not loaded") end
+    if not DCAF.GBAD then return Error(self.Name..":SetupSamAmbushForTarget :: DCAF.GBAD is not loaded") end
     Debug(self.Name..":SetupSamAmbushForTarget")
     return DCAF.GBAD.Ambush:NewForTarget(sam, target, options)
 end

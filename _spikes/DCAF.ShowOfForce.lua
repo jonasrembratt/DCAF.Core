@@ -1,4 +1,4 @@
-local DCAF_ShowOfForce_WpnTrackerCount = 0
+-- local DCAF_ShowOfForce_WpnTrackerCount = 0 -- OBSOLETE (each ShowOfForce maintains its own WepTracker now)
 
 DCAF.ShowOfForce = {
     ClassName = "DCAF.ShowOfForce",
@@ -25,7 +25,7 @@ DCAF.ShowOfForceOptions = {
     ShortTimeout = Minutes(3),      -- monitors sky very frequently for this amount of time
     EndOnEvent = false,             -- when true, the SOF monitoring will automatically end on next SOF event
     BuzzMaxDistance = 400,          -- max distance (meters) a hostile can fly from subject for it to react
-    TriggerMinSpeed = Knots(200),   -- minimum speed (m/s) a hostile needs to fly for a subject to react
+    BuzzMinSpeed = Knots(200),   -- minimum speed (m/s) a hostile needs to fly for a subject to react
     MaxWeaponDistance = 1000,       -- max distance (meters) from subject a weapon can impact for a 'weapons impact' event to trigger
 }
 
@@ -46,23 +46,28 @@ function DCAF.ShowOfForceOptions:InitBuzz(buzzMaxDistance, buzzMinSpeedKnots)
     if buzzMinSpeedKnots ~= nil then
         if not isNumber(buzzMinSpeedKnots) or buzzMinSpeedKnots < 1 then return Error("DCAF.ShowOfForceOptions:InitBuzz :: `buzzMinSpeedKnots` must be positive number, but was: " .. DumpPretty(buzzMinSpeedKnots), self) end
         local buzzMinSpeedMps = UTILS.KnotsToMps(math.max(100, buzzMinSpeedKnots))
-        self.TriggerMinSpeed = buzzMinSpeedMps
+        self.BuzzMinSpeed = buzzMinSpeedMps
     end
     return self
 end
 
 --- Initializes the Weapon (nearby impact) event properties
----@param maxWeaponDistance number (optional) [default = 1000] Specifies max distance (meters) an aircraft needs to drop a weapon from a unit to trigger a "weapon" event
+---@param maxWeaponDistance number Specifies max distance (meters) an aircraft needs to drop a weapon from a unit to trigger a "weapon" event
+---@param maxEventWeaponDistance number (optional) Specifies a distance (must be larger than `maxWeaponDistance` or is ignored) where weapon impact will still trigger an event, but not affect SOF severity
 ---@return self object #DCAF.ShowOfForceOptions
-function DCAF.ShowOfForceOptions:InitWeapon(maxWeaponDistance)
+function DCAF.ShowOfForceOptions:InitWeapon(maxWeaponDistance, maxEventWeaponDistance)
     if maxWeaponDistance == nil or not isNumber(maxWeaponDistance) or maxWeaponDistance < 1 then return Error("DCAF.ShowOfForceOptions:InitWeapon :: `maxWeaponDistance` must be positive number, but was: " .. DumpPretty(maxWeaponDistance), self) end
     self.MaxWeaponDistance = maxWeaponDistance
+    if isNumber(maxEventWeaponDistance) then
+        if maxEventWeaponDistance <= maxWeaponDistance then return Error("DCAF.ShowOfForceOptions:InitWeapon :: `maxEventWeaponDistance` must be greater than `maxWeaponDistance`, but was: "..maxEventWeaponDistance, self) end
+        self.MaxEventWeaponDistance = maxEventWeaponDistance
+    end
     return self
 end
 
 --- Makes a 'subject' group react to shows of force by hostile air units
 ---@param subject any -- #GROUP, #UNIT or name of group/unit to react to a SOF
----@param handler function -- a function to be called back when a SOF event happens
+---@param handler function -- a function to be called back when a SOF event happens. Passes two parameters: The SOF object, and an event (#DCAF_ShowOfForce_Event)
 ---@param options any -- (optional; default = #DCAF.ShowOfForceOptions) specifies options for SOF logic
 function DCAF.ShowOfForce.React(subject, handler, options)
     if not isFunction(handler) then return Error("DCAF.ShowOfForce.React :: `handler` must be function, but was: " .. DumpPretty(handler)) end
@@ -91,13 +96,21 @@ function DCAF.ShowOfForce:UpdateSeverity(event)
         end
         self.Severity = self.Severity + getBuzzSeverity() * 10
     elseif event:IsWeaponImpact() then
+
+
         local function getWpnImpactSeverity()
             local distance = event.ClosestDistance
             local triggerDistance = self.Options.MaxWeaponDistance
+            if distance > triggerDistance then return 0 end
             local distanceFactor = (triggerDistance - distance) / triggerDistance
             return event.WeaponPower * distanceFactor
         end
-        self.Severity = self.Severity + getWpnImpactSeverity()
+
+        local severity = getWpnImpactSeverity()
+        if severity > 0 then
+            self.Severity = self.Severity + severity
+            event.IsInsideRange = true
+        end
     else
         return Error("DCAF.ShowOfForce:UpdateSeverity :: unsupported event type: " .. Dump(event.Type))
     end
@@ -147,7 +160,7 @@ function DCAF.ShowOfForce:_monitorClose()
             if coordUnit then
                 local distance = coordUnit:Get3DDistance(coordSelf)
                 local unitSpeed = unit:GetVelocityMPS()
-                if distance < self.Options.BuzzMaxDistance and unitSpeed >= self.Options.TriggerMinSpeed then
+                if distance < self.Options.BuzzMaxDistance and unitSpeed >= self.Options.BuzzMinSpeed then
                     local closestUnit, closestDistance = getGroupClosestUnit(self.Group, coordUnit)
                     if closestDistance < self.Options.BuzzMaxDistance then
                         self:_eventBuzz(unit, closestUnit, closestDistance, unitSpeed)
@@ -159,6 +172,36 @@ function DCAF.ShowOfForce:_monitorClose()
 
     end, self.Options.ShortInterval)
     pcall(function() self:OnMonitorClose(self.Options.ShortRange) end)
+end
+
+--- Triggers a Buzz event, mainly for debugging/testing purposes
+---@param iniSource table The unit/group that initiates the buzz event
+---@param closestUnit any (optional) [default = first unit of unit/group] The subject unit that is closest to the buzzing unit
+---@param closestDistance any (optional) [default = random: 20-max buzz distance] The distance from buzzing unit to closest unit
+---@param iniUnitSpeed any (optional) [default = highest of buzzing unit speed and minimum buzz speed] Speed of buzzing unit
+function DCAF.ShowOfForce:DebugTriggerBuzz(iniSource, closestUnit, closestDistance, iniUnitSpeed)
+    Debug("DCAF.ShowOfForce:DebugTriggerBuzz :: unitOrGroup: "..DumpPretty(iniSource).." :: closestUnit: "..DumpPretty(closestUnit).." :: closestDistance: "..Dump(closestDistance).." :: iniUnitSpeed: "..Dump(iniUnitSpeed))
+    local iniUnit = getUnit(iniSource)
+    if not iniUnit then
+        local group = getGroup(iniSource)
+        if not group then return Error("DCAF.ShowOfForce:DebugTriggerBuzz :: cannot resolve `unitOrGroup`: "..DumpPretty(iniSource)) end
+        iniUnit = group:GetUnit(1)
+    end
+    if closestUnit == nil then
+        closestUnit = self.Group:GetUnit(1)
+    else
+        local group = resolveGroup(closestUnit)
+        if not group then return Error("DCAF.ShowOfForce:DebugTriggerBuzz :: `could not resolve `closestUnit`: "..DumpPretty(closestUnit)) end
+        closestUnit = group:GetUnit(1)
+    end
+    if not isNumber(closestDistance) then
+        closestDistance = math.random(20, self.Options.BuzzMaxDistance)
+    end
+    if not isNumber(iniUnitSpeed) then
+        iniUnitSpeed = math.max(iniUnit:GetVelocityMPS(), self.Options.BuzzMinSpeed)
+    end
+    Debug("DCAF.ShowOfForce:DebugTriggerBuzz :: iniUnit: "..DumpPretty(iniUnit).." :: closestUnit: "..DumpPretty(closestUnit).." :: closestDistance: "..Dump(closestDistance).." :: iniUnitSpeed: "..Dump(iniUnitSpeed))
+    self:_eventBuzz(iniUnit, closestUnit, closestDistance, iniUnitSpeed)
 end
 
 function DCAF.ShowOfForce:OnMonitorLong(range)
@@ -281,43 +324,54 @@ function DCAF.ShowOfForce:_startWeaponTracker()
 --     nisse:HandleEvent(EVENTS.ShootingEnd, function(_, e)
 -- Debug("nisse - DCAF.ShowOfForce:_startWeaponTracker :: e: " .. DumpPrettyDeep(e, 2))
 --     end)
-        
 
-    DCAF.ShowOfForce._wpnTrackerHandlers = DCAF.ShowOfForce._wpnTrackerHandlers or {}
-    DCAF.ShowOfForce._wpnTrackerHandlers[#DCAF.ShowOfForce._wpnTrackerHandlers+1] = self
-    if DCAF.ShowOfForce._wpnTracker then return DCAF.ShowOfForce._wpnTracker end
-    DCAF.ShowOfForce._wpnTracker = DCAF.WpnTracker:New(self.ClassName):IgnoreIniGroups({self.Group}):Start(false)
-    DCAF_ShowOfForce_WpnTrackerCount = DCAF_ShowOfForce_WpnTrackerCount+1
-    function DCAF.ShowOfForce._wpnTracker:OnImpact(wpnTrack)
-        Debug("DCAF.ShowOfForce:_startWeaponTracker_OnImpact :: wpnTrack: " .. DumpPretty(wpnTrack))
-        for _, showOfForce in ipairs(DCAF.ShowOfForce._wpnTrackerHandlers) do
-            local maxDistance = showOfForce.Options.MaxWeaponDistance
-            local coordWeapon = wpnTrack:GetWeaponCoordinate()
-            local closestUnit
-            local closestDistance = maxDistance+1
-            local units = showOfForce.Group:GetUnits()
-            for _, unit in ipairs(units) do
-                local coordUnit = unit:GetCoordinate()
-                if coordUnit then
-                    local distance = coordUnit:Get2DDistance(coordWeapon)
-                    if distance < closestDistance then
-                        closestDistance = distance
-                        closestUnit = unit
-                    end
+
+    -- DCAF.ShowOfForce._wpnTrackerHandlers = DCAF.ShowOfForce._wpnTrackerHandlers or {}
+    -- DCAF.ShowOfForce._wpnTrackerHandlers[#DCAF.ShowOfForce._wpnTrackerHandlers+1] = self
+    -- if DCAF.ShowOfForce._wpnTracker then return DCAF.ShowOfForce._wpnTracker end
+    -- DCAF.ShowOfForce._wpnTracker = DCAF.WpnTracker:New(self.ClassName):IgnoreIniGroups({self.Group}):Start(false)
+    self._wpnTracker = DCAF.WpnTracker:New(self.ClassName.."/"..self.Name):IgnoreIniGroups({self.Group}):Start(false)
+    local sof = self
+    -- DCAF_ShowOfForce_WpnTrackerCount = DCAF_ShowOfForce_WpnTrackerCount+1
+    function self._wpnTracker:OnImpact(wpnTrack)
+        -- for _, sof in ipairs(DCAF.ShowOfForce._wpnTrackerHandlers) do
+        local maxDistance = sof.Options.MaxEventWeaponDistance or sof.Options.MaxWeaponDistance
+        local coordWeapon = wpnTrack:GetWeaponCoordinate()
+        local closestUnit
+        local closestDistance = maxDistance+1
+Debug("nisse - DCAF.ShowOfForce:_startWeaponTracker_OnImpact :: sof.Group: " .. DumpPretty(sof.Group))
+        local units = sof.Group:GetUnits()
+Debug("nisse - DCAF.ShowOfForce:_startWeaponTracker_OnImpact :: units: " .. DumpPretty(units))
+        if not units then
+            -- seems group's been destroyed, or despawned; end SOF...
+            sof:End()
+            return
+        end
+        for _, unit in ipairs(units) do
+            local coordUnit = unit:GetCoordinate()
+            if coordUnit then
+                local distance = coordUnit:Get2DDistance(coordWeapon)
+                if distance < closestDistance then
+                    closestDistance = distance
+                    closestUnit = unit
                 end
             end
-            if closestUnit then showOfForce:_handleWeaponEvent(DCAF_ShowOfForce_Event:WeaponImpact(wpnTrack, closestUnit, closestDistance)) end
         end
+
+        if closestUnit then sof:_handleWeaponEvent(DCAF_ShowOfForce_Event:WeaponImpact(wpnTrack, closestUnit, closestDistance)) end
+        -- end
     end
-    return DCAF.ShowOfForce._wpnTracker
+    return self._wpnTracker
 end
 
-function DCAF.ShowOfForce._endWeaponTracker()
-    if DCAF_ShowOfForce_WpnTrackerCount == 0 then return end
-    DCAF_ShowOfForce_WpnTrackerCount = DCAF_ShowOfForce_WpnTrackerCount-1
-    if DCAF_ShowOfForce_WpnTrackerCount == 0 then
-        DCAF.ShowOfForce._wpnTracker:End()
-        DCAF.ShowOfForce._wpnTracker = nil
+function DCAF.ShowOfForce:_endWeaponTracker()
+    -- if DCAF_ShowOfForce_WpnTrackerCount == 0 then return end
+    -- DCAF_ShowOfForce_WpnTrackerCount = DCAF_ShowOfForce_WpnTrackerCount-1
+    -- if DCAF_ShowOfForce_WpnTrackerCount == 0 then
+    if self._wpnTracker then
+Debug("nisse - DCAF.ShowOfForce:_endWeaponTracker :: self.Group: "..self.Group.GroupName)
+        self._wpnTracker:End()
+        self._wpnTracker = nil
     end
 end
 
@@ -326,7 +380,11 @@ function DCAF.ShowOfForce:_handleWeaponEvent(event)
     self.WeaponImpactTotalPower = self.WeaponImpactTotalPower + event.WeaponPower
     self:UpdateSeverity(event)
     event.Severity = self.Severity
-    pcall(function() self.Handler(self, event) end)
+    Debug("DCAF.ShowOfForce:_handleWeaponEvent ::\n"..event:DebugText())
+    if isFunction(self.Handler) then
+        local ok, err = pcall(function() self.Handler(self, event) end)
+        if not ok then Error("DCAF.ShowOfForce:_handleWeaponEvent :: error when invoking event handler: " .. DumpPretty(err)) end
+    end
     if self.Options.EndOnEvent then return self:End() end
 end
 
@@ -336,6 +394,7 @@ function DCAF.ShowOfForce:_eventBuzz(iniUnit, closestUnit, closestDistance, iniU
     local event = DCAF_ShowOfForce_Event:Buzz(iniUnit, iniUnitSpeed, closestUnit, closestDistance)
     self:UpdateSeverity(event)
     event.Severity = self.Severity
+    Debug("DCAF.ShowOfForce:_eventBuzz ::\n"..event:DebugText())
     if isFunction(self.Handler) then
         local ok, err = pcall(function() self.Handler(self, event) end)
         if not ok then Error("DCAF.ShowOfForce:_eventBuzz :: error when invoking event handler: " .. DumpPretty(err)) end
@@ -344,6 +403,8 @@ function DCAF.ShowOfForce:_eventBuzz(iniUnit, closestUnit, closestDistance, iniU
 end
 
 function DCAF.ShowOfForce:End()
+    if self._isEnded then return end
+    self._isEnded = true
     Debug("DCAF.ShowOfForce:End :: " .. self.Name)
     self:_endScheduler()
     self:_endWeaponTracker()
